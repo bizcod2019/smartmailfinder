@@ -3,7 +3,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "app.py"
+      "dest": "/api/index"
     }
   ],
   "env": {
@@ -12,7 +12,7 @@
     "STREAMLIT_SERVER_ADDRESS": "0.0.0.0"
   },
   "functions": {
-    "app.py": {
+    "api/index.py": {
       "runtime": "@vercel/python@4.1.0",
       "maxDuration": 60
     }

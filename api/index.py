@@ -21,8 +21,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 添加src目录到Python路径
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+# 添加项目根目录到Python路径
+project_root = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, project_root)
 
 # 导入自定义模块
 try:
