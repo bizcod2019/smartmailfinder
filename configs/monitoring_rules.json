@@ -1,0 +1,50 @@
+{
+  "service": "SmartMailFinder",
+  "domain": "smartmailfinder.jp",
+  "healthcheck": {
+    "url": "https://smartmailfinder.jp/?health=hmf-health-7g3p9x",
+    "method": "GET",
+    "headers": { "Accept": "application/json" },
+    "success_criteria": {
+      "status_code": 200,
+      "jsonpath": [
+        { "path": "$.status", "operator": "in", "value": ["ok", "OK"] },
+        { "path": "$.errors", "operator": "length_eq", "value": 0 }
+      ]
+    },
+    "interval_seconds": 300,
+    "timeout_seconds": 10,
+    "retries": 1
+  },
+  "degradation": {
+    "enabled": true,
+    "rule": {
+      "description": "Indexed emails should be >= 80% of synced",
+      "operator": "ratio_ge",
+      "left_path": "$.emails_indexed",
+      "right_path": "$.emails_synced",
+      "threshold": 0.8
+    },
+    "level": "warn"
+  },
+  "alerts": {
+    "webhook": {
+      "url": "https://ntfy.sh/smartmailfinderjp-errors-wk9t1d5q",
+      "method": "POST",
+      "headers": { "Content-Type": "application/json" },
+      "payload_template": {
+        "level": "error",
+        "source": "external_monitor",
+        "message": "Healthcheck failed or degraded",
+        "details": {
+          "domain": "{{domain}}",
+          "reason": "{{reason}}",
+          "response_status": "{{response_status}}",
+          "response_body": "{{response_body}}",
+          "timestamp": "{{timestamp}}"
+        }
+      }
+    },
+    "email": { "enabled": false, "to": "ops@smartmailfinder.jp" }
+  }
+}

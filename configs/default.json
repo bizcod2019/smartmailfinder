@@ -1,0 +1,9 @@
+{
+  "provider": "自定义IMAP",
+  "server": "imap.bizcod.co.jp",
+  "port": 993,
+  "email": "zhang.xs@bizcod.co.jp",
+  "use_ssl": true,
+  "disable_ssl_verify": true,
+  "saved_at": "2025-10-09T22:25:26.777445"
+}
