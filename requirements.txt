@@ -6,16 +6,16 @@ imaplib2==3.6
 email-validator==2.1.0
 
 # AI和向量搜索
-sentence-transformers==2.2.2
-faiss-cpu==1.7.4
-transformers==4.35.2
+sentence-transformers>=2.2.2
+faiss-cpu>=1.8.0
+transformers>=4.35.2
 
 # 阿里云OSS
 oss2==2.18.4
 
 # 数据处理
 pandas==2.1.3
-numpy==1.24.3
+numpy>=1.24.3
 
 # 文件导出
 openpyxl==3.1.2
