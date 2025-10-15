@@ -77,24 +77,37 @@ class SemanticSearchEngine:
         
     def initialize(self):
         """初始化模型和索引"""
+        # 如果已经初始化，直接返回
+        if self.is_initialized and self.model is not None:
+            logger.info("模型已初始化，跳过重复初始化")
+            return
+            
         try:
             logger.info(f"正在加载模型: {self.model_name}")
             
+            # 设置环境变量以避免torch相关问题
+            import os
+            os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+            
             # 尝试多种方式加载模型以解决兼容性问题
             try:
-                # 方法1: 直接加载
-                self.model = SentenceTransformer(self.model_name)
+                # 方法1: 强制使用CPU，避免设备转换问题
+                import torch
+                torch.set_num_threads(1)  # 限制线程数
+                self.model = SentenceTransformer(self.model_name, device='cpu')
+                logger.info("使用CPU模式加载模型成功")
             except Exception as e1:
-                logger.warning(f"直接加载失败: {str(e1)}, 尝试其他方法...")
+                logger.warning(f"CPU模式加载失败: {str(e1)}, 尝试其他方法...")
                 try:
-                    # 方法2: 使用device参数
-                    import torch
-                    device = 'mps' if torch.backends.mps.is_available() else 'cpu'
-                    self.model = SentenceTransformer(self.model_name, device=device)
+                    # 方法2: 使用更简单的模型
+                    simple_model = "all-MiniLM-L6-v2"
+                    logger.info(f"尝试使用更轻量的模型: {simple_model}")
+                    self.model = SentenceTransformer(simple_model, device='cpu')
+                    self.model_name = simple_model
+                    logger.info("使用轻量模型加载成功")
                 except Exception as e2:
-                    logger.warning(f"指定设备加载失败: {str(e2)}, 尝试CPU模式...")
-                    # 方法3: 强制使用CPU
-                    self.model = SentenceTransformer(self.model_name, device='cpu')
+                    logger.error(f"所有模型加载方法都失败: {str(e2)}")
+                    raise e2
             
             # 测试模型是否正常工作
             test_text = "测试文本"
@@ -108,6 +121,7 @@ class SemanticSearchEngine:
         except Exception as e:
             logger.error(f"初始化失败: {str(e)}")
             self.is_initialized = False
+            self.model = None  # 确保模型为None
             # 提供降级方案
             logger.info("将使用关键词搜索作为降级方案")
     
@@ -330,16 +344,29 @@ class SemanticSearchEngine:
         try:
             logger.info(f"开始构建索引，邮件数量: {len(emails)}")
             
+            # 限制处理的邮件数量以避免内存溢出
+            max_emails = 1000  # 限制最大处理数量
+            if len(emails) > max_emails:
+                logger.warning(f"邮件数量 ({len(emails)}) 超过限制 ({max_emails})，将只处理最新的 {max_emails} 封邮件")
+                # 按日期排序，取最新的邮件
+                emails = sorted(emails, key=lambda x: x.date if x.date else datetime.min, reverse=True)[:max_emails]
+            
             # 准备文本数据和元数据
             texts = []
             metadata = []
             
             for email in emails:
-                # 组合邮件文本用于向量化
+                # 组合邮件文本用于向量化，限制文本长度
                 combined_text = self._prepare_email_text(email)
+                # 限制文本长度以减少内存占用
+                if len(combined_text) > 2000:
+                    combined_text = combined_text[:2000] + "..."
                 texts.append(combined_text)
                 
-                # 保存元数据
+                # 保存元数据，限制body内容长度
+                body_text = email.body_text[:1000] if email.body_text else ""
+                body_html = email.body_html[:1000] if email.body_html else ""
+                
                 metadata.append({
                     'uid': email.uid,
                     'subject': email.subject,
@@ -347,8 +374,8 @@ class SemanticSearchEngine:
                     'date': email.date,
                     'folder': email.folder,
                     'attachments': email.attachments,
-                    'body_text': email.body_text,
-                    'body_html': email.body_html
+                    'body_text': body_text,
+                    'body_html': body_html
                 })
             
             # 无论语义搜索引擎是否初始化成功，都保存元数据以支持关键词搜索
@@ -362,9 +389,25 @@ class SemanticSearchEngine:
             # 如果语义搜索引擎初始化成功，构建向量索引
             if self.is_initialized:
                 try:
-                    # 生成向量
-                    logger.info("正在生成文本向量...")
-                    embeddings = self.model.encode(texts, show_progress_bar=True)
+                    # 批处理生成向量以减少内存占用
+                    batch_size = 50  # 每批处理50封邮件
+                    all_embeddings = []
+                    
+                    logger.info("正在分批生成文本向量...")
+                    for i in range(0, len(texts), batch_size):
+                        batch_texts = texts[i:i+batch_size]
+                        logger.info(f"处理批次 {i//batch_size + 1}/{(len(texts) + batch_size - 1)//batch_size}")
+                        
+                        # 生成当前批次的向量
+                        batch_embeddings = self.model.encode(batch_texts, show_progress_bar=False)
+                        all_embeddings.append(batch_embeddings)
+                        
+                        # 清理内存
+                        del batch_texts, batch_embeddings
+                    
+                    # 合并所有向量
+                    embeddings = np.vstack(all_embeddings)
+                    del all_embeddings  # 清理内存
                     
                     # 构建FAISS索引
                     dimension = embeddings.shape[1]
@@ -375,6 +418,9 @@ class SemanticSearchEngine:
                     
                     # 添加向量到索引
                     self.index.add(embeddings.astype('float32'))
+                    
+                    # 清理内存
+                    del embeddings
                     
                     logger.info(f"语义索引构建完成，包含 {self.index.ntotal} 个向量")
                     return True

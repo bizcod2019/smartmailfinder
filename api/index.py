@@ -13,6 +13,8 @@ import logging
 import time
 from functools import wraps
 import pandas as pd
+import psutil
+import gc
 
 # 配置日志
 logging.basicConfig(
@@ -59,6 +61,56 @@ footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
+# 内存监控和管理
+def get_memory_usage():
+    """获取当前内存使用情况"""
+    try:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        memory_percent = process.memory_percent()
+        return {
+            'rss': memory_info.rss / 1024 / 1024,  # MB
+            'vms': memory_info.vms / 1024 / 1024,  # MB
+            'percent': memory_percent
+        }
+    except Exception as e:
+        logger.warning(f"Failed to get memory usage: {str(e)}")
+        return {'rss': 0, 'vms': 0, 'percent': 0}
+
+def check_memory_limit(max_memory_mb=800):
+    """检查内存使用是否超过限制"""
+    memory_usage = get_memory_usage()
+    if memory_usage['rss'] > max_memory_mb:
+        logger.warning(f"Memory usage ({memory_usage['rss']:.1f}MB) exceeds limit ({max_memory_mb}MB)")
+        return False
+    return True
+
+def force_garbage_collection():
+    """强制垃圾回收"""
+    try:
+        collected = gc.collect()
+        logger.info(f"Garbage collection freed {collected} objects")
+        return collected
+    except Exception as e:
+        logger.warning(f"Garbage collection failed: {str(e)}")
+        return 0
+
+def memory_cleanup():
+    """内存清理"""
+    try:
+        # 强制垃圾回收
+        force_garbage_collection()
+        
+        # 清理Streamlit缓存
+        if hasattr(st, 'cache_data'):
+            st.cache_data.clear()
+        if hasattr(st, 'cache_resource'):
+            st.cache_resource.clear()
+            
+        logger.info("Memory cleanup completed")
+    except Exception as e:
+        logger.warning(f"Memory cleanup failed: {str(e)}")
+
 # 错误通知（webhook）
 def notify_error(context: str, error: Exception, config: Dict):
     try:
@@ -83,15 +135,37 @@ def performance_monitor(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         start_time = time.time()
+        start_memory = get_memory_usage()
+        
         try:
+            # 检查内存限制
+            if not check_memory_limit():
+                logger.warning("Memory limit exceeded, performing cleanup")
+                memory_cleanup()
+            
             result = func(*args, **kwargs)
+            
             execution_time = time.time() - start_time
+            end_memory = get_memory_usage()
+            memory_delta = end_memory['rss'] - start_memory['rss']
+            
             if execution_time > 1.0:  # 记录超过1秒的操作
                 logger.warning(f"Slow operation: {func.__name__} took {execution_time:.2f}s")
+            
+            if memory_delta > 50:  # 记录内存增长超过50MB的操作
+                logger.warning(f"Memory intensive operation: {func.__name__} used {memory_delta:.1f}MB additional memory")
+                
+            # 如果内存使用过高，执行清理
+            if end_memory['rss'] > 600:  # 600MB阈值
+                logger.info("High memory usage detected, performing cleanup")
+                memory_cleanup()
+                
             return result
         except Exception as e:
             execution_time = time.time() - start_time
             logger.error(f"Error in {func.__name__} after {execution_time:.2f}s: {str(e)}")
+            # 错误时也执行内存清理
+            memory_cleanup()
             raise
     return wrapper
 
