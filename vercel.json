@@ -9,11 +9,14 @@
   "env": {
     "PYTHONPATH": ".",
     "STREAMLIT_SERVER_PORT": "8501",
-    "STREAMLIT_SERVER_ADDRESS": "0.0.0.0"
+    "STREAMLIT_SERVER_ADDRESS": "0.0.0.0",
+    "NODE_OPTIONS": "--max-old-space-size=1024"
   },
   "functions": {
     "api/index.py": {
-      "maxDuration": 60
+      "maxDuration": 300,
+      "memory": 1024
     }
-  }
+  },
+  "regions": ["hnd1"]
 }

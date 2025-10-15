@@ -884,7 +884,32 @@ def display_search_results(results: List, query: str, search_time: float = 0):
     
     st.success(f"🎯 找到 {len(display_results)} 封相关邮件 (用时 {search_time:.2f}秒)")
     
-    # 导出选项 - 使用session_state中保存的结果
+    # 分页设置
+    page_size = 20  # 每页显示20条结果，减少内存占用
+    total_results = len(display_results)
+    total_pages = (total_results + page_size - 1) // page_size
+    
+    # 分页控制
+    if total_pages > 1:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            current_page = st.selectbox(
+                f"页面 (共 {total_pages} 页)",
+                range(1, total_pages + 1),
+                key="search_results_page"
+            )
+        
+        # 计算当前页的结果范围
+        start_idx = (current_page - 1) * page_size
+        end_idx = min(start_idx + page_size, total_results)
+        page_results = display_results[start_idx:end_idx]
+        
+        st.info(f"显示第 {start_idx + 1}-{end_idx} 条结果 (共 {total_results} 条)")
+    else:
+        page_results = display_results
+        current_page = 1
+    
+    # 导出选项 - 使用完整的结果集
     export_results = display_results
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
@@ -913,8 +938,8 @@ def display_search_results(results: List, query: str, search_time: float = 0):
             logger.error(f"Excel导出失败: {str(e)}")
             st.error("Excel导出失败")
     
-    # 显示结果
-    for i, result in enumerate(display_results):
+    # 显示当前页的结果
+    for i, result in enumerate(page_results):
         try:
             with st.container():
                 col1, col2 = st.columns([3, 1])

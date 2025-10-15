@@ -555,6 +555,12 @@ class SemanticSearchEngine:
         if top_k is None:
             top_k = self.default_top_k
         
+        # 限制最大结果数量，防止内存溢出
+        max_results = 500  # 最多返回500条结果
+        if top_k > max_results:
+            top_k = max_results
+            logger.warning(f"搜索结果数量已限制为 {max_results} 条，防止内存溢出")
+        
         try:
             # 智能查询解析
             query_info = self._parse_skill_query(query)

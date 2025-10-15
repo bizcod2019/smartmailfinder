@@ -229,21 +229,27 @@ def generate_email_hash(email_data: Dict) -> str:
     
     return hashlib.md5(hash_string.encode('utf-8')).hexdigest()
 
-def export_emails_to_csv(emails: List, filename: str = None) -> bytes:
+def export_emails_to_csv(emails: List, filename: str = None, max_records: int = 1000) -> bytes:
     """
     导出邮件数据到CSV文件
     
     Args:
         emails: 邮件数据列表 (SearchResult对象或字典)
         filename: 输出文件名 (可选)
+        max_records: 最大导出记录数，防止内存溢出 (默认1000)
         
     Returns:
         bytes: CSV数据
     """
     try:
+        # 限制导出数量，防止内存溢出
+        limited_emails = emails[:max_records] if len(emails) > max_records else emails
+        if len(emails) > max_records:
+            logger.warning(f"导出数据量过大，已限制为前{max_records}条记录")
+        
         # 准备数据
         export_data = []
-        for email in emails:
+        for email in limited_emails:
             # 跳过无效的数据类型
             if isinstance(email, str):
                 logger.warning(f"跳过字符串类型的邮件数据: {email[:100]}...")
@@ -289,21 +295,27 @@ def export_emails_to_csv(emails: List, filename: str = None) -> bytes:
         logger.error(f"导出CSV失败: {str(e)}")
         return b""
 
-def export_emails_to_excel(emails: List, filename: str = None) -> bytes:
+def export_emails_to_excel(emails: List, filename: str = None, max_records: int = 1000) -> bytes:
     """
     导出邮件数据到Excel文件
     
     Args:
         emails: 邮件数据列表 (SearchResult对象或字典)
         filename: 输出文件名 (可选)
+        max_records: 最大导出记录数，防止内存溢出 (默认1000)
         
     Returns:
         bytes: Excel数据
     """
     try:
+        # 限制导出数量，防止内存溢出
+        limited_emails = emails[:max_records] if len(emails) > max_records else emails
+        if len(emails) > max_records:
+            logger.warning(f"导出数据量过大，已限制为前{max_records}条记录")
+        
         # 准备数据
         export_data = []
-        for email in emails:
+        for email in limited_emails:
             # 跳过无效的数据类型
             if isinstance(email, str):
                 logger.warning(f"跳过字符串类型的邮件数据: {email[:100]}...")
