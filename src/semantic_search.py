@@ -870,9 +870,11 @@ class SemanticSearchEngine:
         """
         logger.info(f"过滤逻辑 - 搜索方向: {query_info['search_direction']}, 输入结果数量: {len(results)}")
         
-        if query_info['search_direction'] != 'person_to_project':
-            # 非人员→项目搜索，不需要特殊过滤
-            logger.info("非人员→项目搜索，跳过过滤")
+        # 对于所有技能匹配搜索，都需要过滤掉明显的人员信息邮件
+        # 特别是标题中包含人员关键词的邮件
+        if query_info.get('query_type') == 'general':
+            # 只有一般搜索才跳过过滤
+            logger.info("一般搜索，跳过人员信息过滤")
             return results
         
         filtered_results = []
@@ -913,6 +915,9 @@ class SemanticSearchEngine:
         title_person_exclusion_keywords = [
             "プロパー", "人材", "要員", "社員", "営業中", "ご紹介", 
             "推薦", "候補者", "応募者", "稼働中", "稼働可能", "アサイン", "参画可能",
+            # 人员信息相关
+            "要員情報", "人材情報", "人員情報", "社員情報", "メンバー情報",
+            "技術者情報", "エンジニア情報", "開発者情報", "プログラマー情報",
             # 新增的人员介绍关键词
             "人財配信", "弊社直個人", "直個人", "個人情報", "履歴書", "経歴書",
             "人財紹介", "人材紹介", "技術者紹介", "エンジニア紹介", "プログラマー紹介",
