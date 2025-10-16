@@ -673,6 +673,69 @@ def load_email_config(config_name: str = "default",
             return None
         
         with open(config_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+            
+    except Exception as e:
+        logger.error(f"加载邮件配置失败: {str(e)}")
+        return None
+
+# 内存管理函数
+def get_memory_usage():
+    """获取当前内存使用情况"""
+    try:
+        import psutil
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        memory_percent = process.memory_percent()
+        return {
+            'rss': memory_info.rss / 1024 / 1024,  # MB
+            'vms': memory_info.vms / 1024 / 1024,  # MB
+            'percent': memory_percent
+        }
+    except Exception as e:
+        logger.warning(f"Failed to get memory usage: {str(e)}")
+        return {'rss': 0, 'vms': 0, 'percent': 0}
+
+def check_memory_limit(max_memory_mb=400):
+    """检查内存使用是否超过限制"""
+    memory_usage = get_memory_usage()
+    if memory_usage['rss'] > max_memory_mb:
+        logger.warning(f"Memory usage ({memory_usage['rss']:.1f}MB) exceeds limit ({max_memory_mb}MB)")
+        return False
+    return True
+
+def force_garbage_collection():
+    """强制垃圾回收"""
+    try:
+        import gc
+        collected = gc.collect()
+        logger.info(f"Garbage collection freed {collected} objects")
+        return collected
+    except Exception as e:
+        logger.warning(f"Garbage collection failed: {str(e)}")
+        return 0
+
+def memory_cleanup():
+    """内存清理"""
+    try:
+        # 强制垃圾回收
+        force_garbage_collection()
+        
+        # 尝试清理Streamlit缓存（如果可用）
+        try:
+            import streamlit as st
+            if hasattr(st, 'cache_data'):
+                st.cache_data.clear()
+            if hasattr(st, 'cache_resource'):
+                st.cache_resource.clear()
+        except ImportError:
+            pass  # Streamlit不可用时忽略
+            
+        logger.info("Memory cleanup completed")
+    except Exception as e:
+        logger.warning(f"Memory cleanup failed: {str(e)}")
+        
+        with open(config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
         
         logger.info(f"邮箱配置已加载: {config_file}")
@@ -762,7 +825,7 @@ def email_message_to_dict(email_obj) -> Dict:
 
 def save_emails_to_cache(emails: List, cache_dir: str = "./cache") -> bool:
     """
-    保存邮件数据到本地缓存
+    保存邮件数据到本地缓存（带大小限制和优化）
     
     Args:
         emails: 邮件数据列表
@@ -775,35 +838,100 @@ def save_emails_to_cache(emails: List, cache_dir: str = "./cache") -> bool:
         # 确保缓存目录存在
         os.makedirs(cache_dir, exist_ok=True)
         
+        # 限制邮件数量以控制文件大小
+        max_emails = 500  # 最多保存500封邮件
+        if len(emails) > max_emails:
+            logger.warning(f"邮件数量 ({len(emails)}) 超过限制，只保存前 {max_emails} 封")
+            emails = emails[:max_emails]
+        
         # 生成缓存文件名（包含时间戳）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         cache_file = os.path.join(cache_dir, f"emails_cache_{timestamp}.json")
         
-        # 转换邮件数据为字典格式
-        email_dicts = [email_message_to_dict(email) for email in emails]
+        # 转换邮件数据为字典格式，并压缩内容
+        email_dicts = []
+        for email in emails:
+            email_dict = email_message_to_dict(email)
+            # 压缩邮件内容以减少文件大小
+            email_dict = _compress_email_data(email_dict)
+            email_dicts.append(email_dict)
         
         # 保存邮件数据
         cache_data = {
             "timestamp": timestamp,
             "email_count": len(emails),
             "emails": email_dicts,
-            "sync_time": datetime.now().isoformat()
+            "sync_time": datetime.now().isoformat(),
+            "version": "1.1",  # 标记压缩版本
+            "compressed": True
         }
         
+        # 使用紧凑格式保存（不缩进）以减少文件大小
         with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, ensure_ascii=False, indent=2, default=str)
+            json.dump(cache_data, f, ensure_ascii=False, separators=(',', ':'), default=str)
+        
+        # 检查文件大小
+        file_size = os.path.getsize(cache_file)
+        max_size = 50 * 1024 * 1024  # 50MB限制
+        
+        if file_size > max_size:
+            logger.error(f"生成的缓存文件过大 ({file_size / 1024 / 1024:.1f}MB)，删除文件")
+            os.remove(cache_file)
+            return False
         
         # 保存最新缓存文件的引用
         latest_cache_file = os.path.join(cache_dir, "latest_emails_cache.json")
         with open(latest_cache_file, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, ensure_ascii=False, indent=2, default=str)
+            json.dump(cache_data, f, ensure_ascii=False, separators=(',', ':'), default=str)
         
-        logger.info(f"邮件数据已保存到缓存: {cache_file}")
+        logger.info(f"邮件数据已保存到缓存: {cache_file} ({file_size / 1024 / 1024:.1f}MB)")
         return True
         
     except Exception as e:
         logger.error(f"保存邮件数据到缓存失败: {str(e)}")
         return False
+
+
+def _compress_email_data(email_dict: Dict) -> Dict:
+    """
+    压缩邮件数据以减少存储空间
+    
+    Args:
+        email_dict: 邮件字典
+        
+    Returns:
+        Dict: 压缩后的邮件字典
+    """
+    compressed = email_dict.copy()
+    
+    # 限制文本长度
+    if 'body_text' in compressed and compressed['body_text']:
+        compressed['body_text'] = compressed['body_text'][:1000]  # 限制1000字符
+    
+    if 'body_html' in compressed and compressed['body_html']:
+        compressed['body_html'] = compressed['body_html'][:1000]  # 限制1000字符
+    
+    if 'subject' in compressed and compressed['subject']:
+        compressed['subject'] = compressed['subject'][:200]  # 限制200字符
+    
+    # 移除不必要的字段
+    unnecessary_fields = ['raw_message', 'headers', 'message_id']
+    for field in unnecessary_fields:
+        if field in compressed:
+            del compressed[field]
+    
+    # 简化附件信息
+    if 'attachments' in compressed and compressed['attachments']:
+        simplified_attachments = []
+        for att in compressed['attachments'][:5]:  # 最多保存5个附件信息
+            simplified_attachments.append({
+                'filename': att.get('filename', '')[:100],  # 限制文件名长度
+                'size': att.get('size', 0),
+                'content_type': att.get('content_type', '')[:50]
+            })
+        compressed['attachments'] = simplified_attachments
+    
+    return compressed
 
 def dict_to_email_message(email_dict: Dict) -> 'EmailMessage':
     """
@@ -844,7 +972,7 @@ def dict_to_email_message(email_dict: Dict) -> 'EmailMessage':
 
 def load_emails_from_cache(cache_dir: str = "./cache") -> Optional[List]:
     """
-    从本地缓存加载邮件数据
+    从本地缓存加载邮件数据（带内存限制检查）
     
     Args:
         cache_dir: 缓存目录
@@ -859,11 +987,32 @@ def load_emails_from_cache(cache_dir: str = "./cache") -> Optional[List]:
             logger.info("未找到邮件缓存文件")
             return None
         
+        # 检查文件大小，防止内存溢出
+        file_size = os.path.getsize(latest_cache_file)
+        max_file_size = 100 * 1024 * 1024  # 100MB限制
+        
+        if file_size > max_file_size:
+            logger.error(f"缓存文件过大 ({file_size / 1024 / 1024:.1f}MB > {max_file_size / 1024 / 1024:.1f}MB)，跳过加载以防止内存溢出")
+            return None
+        
+        logger.info(f"加载缓存文件 ({file_size / 1024 / 1024:.1f}MB)")
+        
+        # 分块读取大文件
+        if file_size > 10 * 1024 * 1024:  # 10MB以上使用分块读取
+            return _load_large_cache_file(latest_cache_file)
+        
+        # 小文件直接加载
         with open(latest_cache_file, 'r', encoding='utf-8') as f:
             cache_data = json.load(f)
         
         email_dicts = cache_data.get("emails", [])
         sync_time = cache_data.get("sync_time", "未知")
+        
+        # 限制邮件数量以控制内存使用
+        max_emails = 500  # 最多加载500封邮件
+        if len(email_dicts) > max_emails:
+            logger.warning(f"缓存中有 {len(email_dicts)} 封邮件，限制加载前 {max_emails} 封")
+            email_dicts = email_dicts[:max_emails]
         
         # 将字典转换为EmailMessage对象
         emails = [dict_to_email_message(email_dict) for email_dict in email_dicts]
@@ -873,6 +1022,67 @@ def load_emails_from_cache(cache_dir: str = "./cache") -> Optional[List]:
         
     except Exception as e:
         logger.error(f"从缓存加载邮件数据失败: {str(e)}")
+        return None
+
+
+def _load_large_cache_file(cache_file: str) -> Optional[List]:
+    """
+    分块加载大缓存文件
+    
+    Args:
+        cache_file: 缓存文件路径
+        
+    Returns:
+        Optional[List]: 邮件数据列表
+    """
+    try:
+        import ijson  # 流式JSON解析器
+        
+        emails = []
+        max_emails = 500  # 最多加载500封邮件
+        
+        with open(cache_file, 'rb') as f:
+            # 流式解析JSON中的emails数组
+            parser = ijson.items(f, 'emails.item')
+            
+            for i, email_dict in enumerate(parser):
+                if i >= max_emails:
+                    logger.warning(f"已达到最大邮件数量限制 ({max_emails})，停止加载")
+                    break
+                
+                try:
+                    email = dict_to_email_message(email_dict)
+                    emails.append(email)
+                    
+                    if (i + 1) % 100 == 0:
+                        logger.info(f"已加载 {i + 1} 封邮件...")
+                        
+                except Exception as e:
+                    logger.warning(f"解析邮件 {i} 失败: {e}")
+                    continue
+        
+        logger.info(f"分块加载完成，共加载 {len(emails)} 封邮件")
+        return emails
+        
+    except ImportError:
+        logger.warning("ijson库未安装，回退到普通加载模式")
+        # 回退到普通模式，但限制邮件数量
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            email_dicts = cache_data.get("emails", [])[:500]  # 限制500封
+            emails = [dict_to_email_message(email_dict) for email_dict in email_dicts]
+            
+            logger.info(f"回退模式加载了 {len(emails)} 封邮件")
+            return emails
+            
+        except Exception as e:
+            logger.error(f"回退模式加载失败: {e}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"分块加载失败: {e}")
         return None
 
 def get_cache_info(cache_dir: str = "./cache") -> Optional[Dict]:

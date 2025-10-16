@@ -40,5 +40,8 @@ jieba==0.42.1
 # 系统监控
 psutil==5.9.6
 
+# 流式JSON解析 (用于大文件处理)
+ijson==3.2.3
+
 # OpenAI API (可选，用于外部embedding服务)
 openai>=1.0.0

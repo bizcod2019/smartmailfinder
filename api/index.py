@@ -213,12 +213,40 @@ def init_session_state():
 # 初始化
 init_session_state()
 
-# 自动加载缓存的邮件数据
+# 自动加载缓存的邮件数据（带环境检测）
 if not st.session_state.emails_data:
-    cached_emails = load_emails_from_cache()
-    if cached_emails:
-        st.session_state.emails_data = cached_emails
-        logger.info(f"自动加载了 {len(cached_emails)} 封缓存邮件")
+    # 检测是否在Vercel环境中
+    is_vercel = os.environ.get('VERCEL') == '1' or os.environ.get('VERCEL_ENV') is not None
+    
+    if is_vercel:
+        logger.info("检测到Vercel环境，使用严格的内存限制")
+        # 在Vercel环境中，更保守地加载缓存
+        try:
+            # 检查当前内存使用
+            if not check_memory_limit(max_memory_mb=200):  # 更严格的限制
+                logger.warning("内存使用已接近限制，跳过缓存加载")
+            else:
+                cached_emails = load_emails_from_cache()
+                if cached_emails:
+                    # 在Vercel环境中进一步限制邮件数量
+                    max_emails_vercel = 200  # Vercel环境最多200封
+                    if len(cached_emails) > max_emails_vercel:
+                        cached_emails = cached_emails[:max_emails_vercel]
+                        logger.warning(f"Vercel环境限制，只加载前 {max_emails_vercel} 封邮件")
+                    
+                    st.session_state.emails_data = cached_emails
+                    logger.info(f"Vercel环境自动加载了 {len(cached_emails)} 封缓存邮件")
+        except Exception as e:
+            logger.error(f"Vercel环境加载缓存失败: {e}")
+    else:
+        # 本地环境正常加载
+        try:
+            cached_emails = load_emails_from_cache()
+            if cached_emails:
+                st.session_state.emails_data = cached_emails
+                logger.info(f"本地环境自动加载了 {len(cached_emails)} 封缓存邮件")
+        except Exception as e:
+            logger.error(f"本地环境加载缓存失败: {e}")
 
 # 加载配置
 @st.cache_data(ttl=120)  # 2分钟缓存 - 减少内存占用
@@ -1177,8 +1205,22 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
         st.error("❌ 请先配置并连接邮箱")
         return
     
+    # 检测Vercel环境并调整限制
+    is_vercel = os.environ.get('VERCEL') == '1' or os.environ.get('VERCEL_ENV') is not None
+    if is_vercel:
+        # Vercel环境使用更严格的限制
+        original_limit = limit
+        limit = min(limit, 200) if limit != -1 else 200  # 最多200封邮件
+        days_back = min(days_back, 30) if days_back != -1 else 30  # 最多30天
+        st.warning(f"🔧 检测到Vercel环境，已调整同步限制: 邮件数量 {original_limit} → {limit}, 天数 {days_back}")
+    
     with st.spinner("正在同步邮件..."):
         try:
+            # 检查内存使用
+            if is_vercel and not check_memory_limit(max_memory_mb=300):
+                st.error("❌ 内存使用过高，无法进行邮件同步")
+                return
+            
             # 获取邮件文件夹
             folders = st.session_state.email_connector.get_folders()
             
@@ -1187,6 +1229,11 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
                 # 过滤掉常见的已发送邮件文件夹
                 sent_folders = ['Sent', 'Sent Items', '已发送', 'Sent Messages', 'Drafts', '草稿箱']
                 folders = [f for f in folders if not any(sent in f for sent in sent_folders)]
+            
+            # 在Vercel环境中限制文件夹数量
+            if is_vercel and len(folders) > 3:
+                folders = folders[:3]  # 最多同步3个文件夹
+                st.warning(f"🔧 Vercel环境限制，只同步前3个文件夹")
             
             all_emails = []
             progress_bar = st.progress(0)
@@ -1197,6 +1244,12 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
             
             for i, folder in enumerate(folders):
                 st.text(f"正在同步文件夹: {folder}")
+                
+                # 在Vercel环境中检查内存使用
+                if is_vercel and i > 0:  # 从第二个文件夹开始检查
+                    if not check_memory_limit(max_memory_mb=400):
+                        st.warning(f"⚠️ 内存使用过高，停止同步剩余文件夹 (已同步 {i}/{len(folders)} 个)")
+                        break
                 
                 # 设置实际的限制参数
                 actual_limit = None if limit == -1 else limit
@@ -1212,6 +1265,11 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
                 
                 # 显示当前文件夹的邮件数量
                 st.text(f"  └─ 获取到 {len(emails)} 封邮件")
+                
+                # 在Vercel环境中进行内存清理
+                if is_vercel and (i + 1) % 2 == 0:  # 每2个文件夹清理一次
+                    memory_cleanup()
+                    st.text(f"  └─ 已进行内存清理")
             
             st.session_state.emails_data = all_emails
             st.session_state.last_sync_time = datetime.now()
