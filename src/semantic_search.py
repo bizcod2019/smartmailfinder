@@ -1,13 +1,10 @@
 """
 语义搜索引擎模块
 基于Sentence Transformers和FAISS实现智能邮件搜索
+在Vercel环境下自动降级到轻量级搜索引擎
 """
 
 import numpy as np
-import faiss
-from sentence_transformers import SentenceTransformer
-from typing import List, Dict, Tuple, Optional
-import pickle
 import os
 import re
 from datetime import datetime, timedelta
@@ -16,10 +13,46 @@ from dataclasses import dataclass
 import json
 import jieba
 from collections import Counter
+from typing import List, Dict, Tuple, Optional
+
+# 检查是否在Vercel环境中
+IS_VERCEL = os.environ.get('VERCEL') == '1' or os.environ.get('VERCEL_ENV') is not None
+
+# 根据环境选择导入
+if not IS_VERCEL:
+    try:
+        import faiss
+        from sentence_transformers import SentenceTransformer
+        HEAVY_LIBS_AVAILABLE = True
+        logger = logging.getLogger(__name__)
+        logger.info("重型库可用，使用完整语义搜索")
+    except ImportError as e:
+        HEAVY_LIBS_AVAILABLE = False
+        logger = logging.getLogger(__name__)
+        logger.warning(f"重型库不可用: {e}，将使用轻量级搜索")
+else:
+    HEAVY_LIBS_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.info("检测到Vercel环境，使用轻量级搜索引擎")
+
+# 导入轻量级搜索引擎
+try:
+    from .lightweight_search import LightweightSemanticSearch
+    LIGHTWEIGHT_AVAILABLE = True
+except ImportError:
+    LIGHTWEIGHT_AVAILABLE = False
+    logger.error("轻量级搜索引擎不可用")
+
+# 导入OpenAI搜索引擎
+try:
+    from .openai_search import OpenAISemanticSearch
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logger.error("OpenAI搜索引擎不可用")
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 @dataclass
 class SearchResult:
@@ -53,6 +86,34 @@ class SemanticSearchEngine:
         self.max_preview_length = 200
         self.default_top_k = 20
         
+        # 轻量级搜索引擎
+        self.lightweight_engine = None
+        self.openai_engine = None
+        self.use_lightweight = IS_VERCEL or not HEAVY_LIBS_AVAILABLE
+        
+        # 检查是否有OpenAI API密钥
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        self.use_openai = bool(openai_api_key) and OPENAI_AVAILABLE
+        
+        # 优先使用OpenAI搜索引擎（如果有API密钥）
+        if self.use_openai:
+            try:
+                self.openai_engine = OpenAISemanticSearch(api_key=openai_api_key)
+                logger.info("OpenAI搜索引擎初始化成功")
+            except Exception as e:
+                logger.error(f"OpenAI搜索引擎初始化失败: {e}")
+                self.openai_engine = None
+                self.use_openai = False
+        
+        # 如果OpenAI不可用，使用轻量级引擎
+        if not self.use_openai and self.use_lightweight and LIGHTWEIGHT_AVAILABLE:
+            try:
+                self.lightweight_engine = LightweightSemanticSearch()
+                logger.info("轻量级搜索引擎初始化成功")
+            except Exception as e:
+                logger.error(f"轻量级搜索引擎初始化失败: {e}")
+                self.lightweight_engine = None
+        
         # 技能关键词映射（中日文）
         self.skill_keywords = {
             'java': ['Java', 'java', 'JAVA', 'ジャバ', 'ジャヴァ'],
@@ -77,9 +138,35 @@ class SemanticSearchEngine:
         
     def initialize(self):
         """初始化模型和索引"""
+        # 如果使用OpenAI搜索引擎
+        if self.use_openai:
+            if self.openai_engine is not None:
+                self.is_initialized = True
+                logger.info("使用OpenAI搜索引擎，跳过重型模型加载")
+                return
+            else:
+                logger.error("OpenAI搜索引擎不可用")
+                return
+        
+        # 如果使用轻量级引擎
+        if self.use_lightweight:
+            if self.lightweight_engine is not None:
+                self.is_initialized = True
+                logger.info("使用轻量级搜索引擎，跳过重型模型加载")
+                return
+            else:
+                logger.error("轻量级搜索引擎不可用")
+                return
+                
         # 如果已经初始化，直接返回
         if self.is_initialized and self.model is not None:
             logger.info("模型已初始化，跳过重复初始化")
+            return
+            
+        # 检查重型库是否可用
+        if not HEAVY_LIBS_AVAILABLE:
+            logger.warning("重型库不可用，无法加载transformer模型")
+            self.is_initialized = False
             return
             
         try:
@@ -344,8 +431,8 @@ class SemanticSearchEngine:
         try:
             logger.info(f"开始构建索引，邮件数量: {len(emails)}")
             
-            # 限制处理的邮件数量以避免内存溢出
-            max_emails = 1000  # 限制最大处理数量
+            # 限制处理的邮件数量以避免内存溢出 - 更严格的限制
+            max_emails = 500  # 限制最大处理数量
             if len(emails) > max_emails:
                 logger.warning(f"邮件数量 ({len(emails)}) 超过限制 ({max_emails})，将只处理最新的 {max_emails} 封邮件")
                 # 按日期排序，取最新的邮件
@@ -358,14 +445,14 @@ class SemanticSearchEngine:
             for email in emails:
                 # 组合邮件文本用于向量化，限制文本长度
                 combined_text = self._prepare_email_text(email)
-                # 限制文本长度以减少内存占用
-                if len(combined_text) > 2000:
-                    combined_text = combined_text[:2000] + "..."
+                # 限制文本长度以减少内存占用 - 更严格的限制
+                if len(combined_text) > 1000:
+                    combined_text = combined_text[:1000] + "..."
                 texts.append(combined_text)
                 
-                # 保存元数据，限制body内容长度
-                body_text = email.body_text[:1000] if email.body_text else ""
-                body_html = email.body_html[:1000] if email.body_html else ""
+                # 保存元数据，限制body内容长度 - 更严格的限制
+                body_text = email.body_text[:500] if email.body_text else ""
+                body_html = email.body_html[:500] if email.body_html else ""
                 
                 metadata.append({
                     'uid': email.uid,
@@ -386,11 +473,21 @@ class SemanticSearchEngine:
             if not self.is_initialized:
                 self.initialize()
             
+            # 如果使用OpenAI搜索引擎
+            if self.use_openai and self.openai_engine is not None:
+                logger.info("使用OpenAI搜索引擎构建索引")
+                return self.openai_engine.build_index(emails)
+            
+            # 如果使用轻量级引擎
+            if self.use_lightweight and self.lightweight_engine is not None:
+                logger.info("使用轻量级搜索引擎构建索引")
+                return self.lightweight_engine.build_index(emails)
+            
             # 如果语义搜索引擎初始化成功，构建向量索引
-            if self.is_initialized:
+            if self.is_initialized and HEAVY_LIBS_AVAILABLE:
                 try:
-                    # 批处理生成向量以减少内存占用
-                    batch_size = 50  # 每批处理50封邮件
+                    # 批处理生成向量以减少内存占用 - 更小的批次
+                    batch_size = 20  # 每批处理20封邮件
                     all_embeddings = []
                     
                     logger.info("正在分批生成文本向量...")
@@ -594,6 +691,16 @@ class SemanticSearchEngine:
         Returns:
             List[SearchResult]: 搜索结果列表
         """
+        # 如果使用OpenAI搜索引擎
+        if self.use_openai and self.openai_engine is not None:
+            logger.info("使用OpenAI搜索引擎执行搜索")
+            return self.openai_engine.search(query, top_k, filters)
+        
+        # 如果使用轻量级引擎
+        if self.use_lightweight and self.lightweight_engine is not None:
+            logger.info("使用轻量级搜索引擎执行搜索")
+            return self.lightweight_engine.search(query, top_k, filters)
+        
         if not self.is_initialized or self.index is None:
             logger.warning("语义搜索引擎未初始化，使用关键词搜索作为降级方案")
             return self.keyword_search(query, top_k)
@@ -601,8 +708,8 @@ class SemanticSearchEngine:
         if top_k is None:
             top_k = self.default_top_k
         
-        # 限制最大结果数量，防止内存溢出
-        max_results = 500  # 最多返回500条结果
+        # 限制最大结果数量，防止内存溢出 - 更严格的限制
+        max_results = 100  # 最多返回100条结果
         if top_k > max_results:
             top_k = max_results
             logger.warning(f"搜索结果数量已限制为 {max_results} 条，防止内存溢出")

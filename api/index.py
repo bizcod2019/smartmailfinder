@@ -77,8 +77,8 @@ def get_memory_usage():
         logger.warning(f"Failed to get memory usage: {str(e)}")
         return {'rss': 0, 'vms': 0, 'percent': 0}
 
-def check_memory_limit(max_memory_mb=800):
-    """检查内存使用是否超过限制"""
+def check_memory_limit(max_memory_mb=400):
+    """检查内存使用是否超过限制 - 更严格的限制"""
     memory_usage = get_memory_usage()
     if memory_usage['rss'] > max_memory_mb:
         logger.warning(f"Memory usage ({memory_usage['rss']:.1f}MB) exceeds limit ({max_memory_mb}MB)")
@@ -156,7 +156,7 @@ def performance_monitor(func):
                 logger.warning(f"Memory intensive operation: {func.__name__} used {memory_delta:.1f}MB additional memory")
                 
             # 如果内存使用过高，执行清理
-            if end_memory['rss'] > 600:  # 600MB阈值
+            if end_memory['rss'] > 300:  # 300MB阈值 - 更严格的限制
                 logger.info("High memory usage detected, performing cleanup")
                 memory_cleanup()
                 
@@ -221,7 +221,7 @@ if not st.session_state.emails_data:
         logger.info(f"自动加载了 {len(cached_emails)} 封缓存邮件")
 
 # 加载配置
-@st.cache_data(ttl=300)  # 5分钟缓存
+@st.cache_data(ttl=120)  # 2分钟缓存 - 减少内存占用
 def load_app_config():
     """加载应用配置"""
     try:
@@ -490,7 +490,7 @@ def configure_search_settings() -> Dict:
     )
     
     # 结果数量限制
-    search_config['max_results'] = st.slider("最大结果数", 10, 100, 20)
+    search_config['max_results'] = st.slider("最大结果数", 5, 50, 10)
     
     return search_config
 
