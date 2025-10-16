@@ -1,0 +1,1 @@
+web: streamlit run api/index.py --server.port $PORT --server.address 0.0.0.0
