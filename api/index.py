@@ -13,8 +13,15 @@ import logging
 import time
 from functools import wraps
 import pandas as pd
-import psutil
 import gc
+
+# 尝试导入psutil，如果失败则使用备用方案
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    logger.warning("psutil not available, memory monitoring will be limited")
 
 # 配置日志
 logging.basicConfig(
@@ -64,6 +71,10 @@ footer {visibility: hidden;}
 # 内存监控和管理
 def get_memory_usage():
     """获取当前内存使用情况"""
+    if not PSUTIL_AVAILABLE:
+        # 如果psutil不可用，返回默认值
+        return {'rss': 0, 'vms': 0, 'percent': 0}
+    
     try:
         process = psutil.Process()
         memory_info = process.memory_info()
