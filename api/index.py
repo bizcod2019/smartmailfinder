@@ -37,7 +37,8 @@ try:
         validate_search_query, highlight_search_terms, save_email_config,
         load_email_config, list_saved_configs, delete_email_config,
         save_emails_to_cache, load_emails_from_cache, get_cache_info,
-        clean_html_tags
+        clean_html_tags, get_historical_cache_files, load_emails_from_specific_cache,
+        search_emails_in_cache
     )
 except ImportError as e:
     st.error(f"模块导入失败: {str(e)}")
@@ -631,19 +632,49 @@ def search_interface(search_config: Dict):
             else:
                 st.error("❌ 需配置")
     
+    # 初始化缓存文件选择变量
+    selected_cache_file = None
+    if search_mode in ["智能搜索", "技能匹配搜索"]:
+        # 获取历史缓存文件列表
+        historical_files = get_historical_cache_files()
+        
+        if historical_files:
+            # 创建缓存选项列表，最新缓存显示为"最新"，历史缓存显示时间信息
+            cache_options = ["最新"]
+            for file in historical_files:
+                # 从文件名中提取日期编号（去掉前缀和后缀）
+                filename = file['filename']
+                if filename.startswith('emails_cache_') and filename.endswith('.json'):
+                    date_part = filename[13:-5]  # 去掉 'emails_cache_' 和 '.json'
+                    readable_time = file.get('readable_time', date_part)
+                    # 显示格式：日期编号 (时间)
+                    display_text = f"{date_part} ({readable_time})"
+                    cache_options.append(display_text)
+            
+            selected_cache_file = st.selectbox(
+                "📂 数据源",
+                options=cache_options,
+                help="选择要搜索的数据源：最新缓存或历史缓存文件"
+            )
+    else:
+        # 对于实时搜索模式，确保变量有定义
+        selected_cache_file = None
+    
     # 根据搜索模式显示不同的提示
     if search_mode == "智能搜索":
         search_disabled = not st.session_state.search_engine
         if search_disabled:
             st.warning("⚠️ 智能搜索需要先同步邮件。您可以切换到实时搜索模式或先同步邮件。")
         else:
-            st.info("💡 智能搜索支持自然语言查询，例如：'昨天的会议邮件'、'包含附件的重要邮件'、'来自客户的报价单'等")
+            cache_info = "最新缓存" if selected_cache_file is None or selected_cache_file == "最新" else f"历史缓存 ({selected_cache_file})"
+            st.info(f"💡 智能搜索支持自然语言查询，当前数据源：{cache_info}\n例如：'昨天的会议邮件'、'包含附件的重要邮件'、'来自客户的报价单'等")
     elif search_mode == "技能匹配搜索":
         search_disabled = not st.session_state.search_engine
         if search_disabled:
             st.warning("⚠️ 技能匹配搜索需要先同步邮件。您可以切换到实时搜索模式或先同步邮件。")
         else:
-            st.info("🎯 技能匹配搜索支持双向匹配：\n• 输入人员技能 → 匹配项目需求\n• 输入项目需求 → 匹配相关人员\n例如：'4年Java程序员，会Vue3、SpringBoot、MyBatis' 或 '招聘Python开发工程师，要求3年以上经验'")
+            cache_info = "最新缓存" if selected_cache_file is None or selected_cache_file == "最新" else f"历史缓存 ({selected_cache_file})"
+            st.info(f"🎯 技能匹配搜索支持双向匹配，当前数据源：{cache_info}\n• 输入人员技能 → 匹配项目需求\n• 输入项目需求 → 匹配相关人员\n例如：'4年Java程序员，会Vue3、SpringBoot、MyBatis' 或 '招聘Python开发工程师，要求3年以上经验'")
     else:
         search_disabled = not st.session_state.email_connector
         if search_disabled:
@@ -670,6 +701,8 @@ def search_interface(search_config: Dict):
     # 搜索按钮
     if search_mode == "智能搜索":
         button_text = "🔍 智能搜索" if not search_disabled else "🔍 智能搜索（请先同步邮件）"
+    elif search_mode == "技能匹配搜索":
+        button_text = "🔍 技能匹配搜索" if not search_disabled else "🔍 技能匹配搜索（请先同步邮件）"
     else:
         button_text = "🔍 实时搜索" if not search_disabled else "🔍 实时搜索（请先配置邮箱）"
     
@@ -703,9 +736,11 @@ def search_interface(search_config: Dict):
             st.error("❌ 请先配置邮箱连接")
         else:
             if search_mode == "智能搜索":
-                spinner_text = "正在智能搜索邮件..."
+                cache_info = "最新缓存" if selected_cache_file is None or selected_cache_file == "最新" else f"历史缓存 ({selected_cache_file})"
+                spinner_text = f"正在智能搜索邮件（{cache_info}）..."
             elif search_mode == "技能匹配搜索":
-                spinner_text = "正在匹配技能和项目需求..."
+                cache_info = "最新缓存" if selected_cache_file is None or selected_cache_file == "最新" else f"历史缓存 ({selected_cache_file})"
+                spinner_text = f"正在匹配技能和项目需求（{cache_info}）..."
             else:
                 spinner_text = "正在实时搜索邮件..."
                 
@@ -714,67 +749,201 @@ def search_interface(search_config: Dict):
                     start_time = time.time()
                     
                     if search_mode == "智能搜索":
-                        # 使用现有的智能搜索
-                        results = perform_search(query, search_config, sender_filter, subject_filter, has_attachment)
+                        # 如果选择了历史缓存文件，先加载该文件的邮件
+                        if selected_cache_file and selected_cache_file != "最新":
+                            # 从显示文本中提取实际的日期编号（格式：日期编号 (时间)）
+                            if " (" in selected_cache_file:
+                                date_part = selected_cache_file.split(" (")[0]
+                            else:
+                                date_part = selected_cache_file
+                            # 构造完整的文件名
+                            cache_filename = f"emails_cache_{date_part}.json"
+                            emails = load_emails_from_specific_cache(cache_filename)
+                            if emails:
+                                # 创建临时的语义搜索引擎实例用于历史缓存
+                                from src.semantic_search import SemanticSearchEngine
+                                temp_search_engine = SemanticSearchEngine()
+                                
+                                # 使用历史缓存数据构建临时索引
+                                if temp_search_engine.build_index(emails):
+                                    # 使用智能语义搜索
+                                    search_results = temp_search_engine.search(query, search_config.get('max_results', 20))
+                                    
+                                    # 转换为统一格式并应用筛选器
+                                    results = []
+                                    for result in search_results:
+                                        # 应用筛选器
+                                        if sender_filter and sender_filter.lower() not in result.sender.lower():
+                                            continue
+                                        if subject_filter and subject_filter.lower() not in result.subject.lower():
+                                            continue
+                                        if has_attachment and not result.attachments:
+                                            continue
+                                        
+                                        # 转换为统一格式
+                                        results.append({
+                                            'uid': result.email_id,
+                                            'subject': result.subject,
+                                            'sender': result.sender,
+                                            'date': result.date,
+                                            'folder': result.folder,
+                                            'attachments': result.attachments,
+                                            'body_text': result.body_text,
+                                            'score': result.score
+                                        })
+                                else:
+                                    # 如果语义搜索失败，降级到关键词搜索
+                                    results = search_emails_in_cache(emails, query)
+                                    # 应用筛选器
+                                    filtered_results = []
+                                    for result in results:
+                                        if sender_filter and sender_filter.lower() not in result.get('sender', '').lower():
+                                            continue
+                                        if subject_filter and subject_filter.lower() not in result.get('subject', '').lower():
+                                            continue
+                                        if has_attachment and not result.get('attachments'):
+                                            continue
+                                        filtered_results.append(result)
+                                    results = filtered_results
+                                    st.warning("⚠️ 智能搜索引擎初始化失败，已降级到关键词搜索")
+                            else:
+                                results = []
+                        else:
+                            # 使用现有的智能搜索（最新缓存）
+                            results = perform_search(query, search_config, sender_filter, subject_filter, has_attachment)
                     elif search_mode == "技能匹配搜索":
-                        # 使用技能匹配搜索
-                        search_results, query_info = st.session_state.search_engine.intelligent_skill_search(query, search_config.get('max_results', 20))
-                        
-                        # 转换为统一格式并应用筛选器
-                        results = []
-                        for result in search_results:
-                            # 应用筛选器
-                            if sender_filter and sender_filter.lower() not in result.sender.lower():
-                                continue
-                            if subject_filter and subject_filter.lower() not in result.subject.lower():
-                                continue
-                            if has_attachment and not result.attachments:
-                                continue
+                        # 如果选择了历史缓存文件，先加载该文件的邮件
+                        if selected_cache_file and selected_cache_file != "最新":
+                            # 从显示文本中提取实际的日期编号（格式：日期编号 (时间)）
+                            if " (" in selected_cache_file:
+                                date_part = selected_cache_file.split(" (")[0]
+                            else:
+                                date_part = selected_cache_file
+                            # 构造完整的文件名
+                            cache_filename = f"emails_cache_{date_part}.json"
+                            emails = load_emails_from_specific_cache(cache_filename)
+                            if emails:
+                                # 创建临时的语义搜索引擎实例用于历史缓存
+                                from src.semantic_search import SemanticSearchEngine
+                                temp_search_engine = SemanticSearchEngine()
+                                
+                                # 初始化query_info变量
+                                query_info = None
+                                
+                                # 使用历史缓存数据构建临时索引
+                                if temp_search_engine.build_index(emails):
+                                    # 使用智能技能匹配搜索
+                                    search_results, query_info = temp_search_engine.intelligent_skill_search(query, search_config.get('max_results', 20))
+                                    
+                                    # 转换为统一格式并应用筛选器
+                                    results = []
+                                    for result in search_results:
+                                        # 应用筛选器
+                                        if sender_filter and sender_filter.lower() not in result.sender.lower():
+                                            continue
+                                        if subject_filter and subject_filter.lower() not in result.subject.lower():
+                                            continue
+                                        if has_attachment and not result.attachments:
+                                            continue
+                                        
+                                        # 转换为统一格式
+                                        results.append({
+                                            'uid': result.email_id,
+                                            'subject': result.subject,
+                                            'sender': result.sender,
+                                            'date': result.date,
+                                            'folder': result.folder,
+                                            'attachments': result.attachments,
+                                            'body_text': result.body_text,
+                                            'score': result.score
+                                        })
+                                    
+                                    # 显示双向匹配信息
+                                    if query_info:
+                                        input_type = query_info.get('input_type', 'unknown')
+                                        search_direction = query_info.get('search_direction', 'bidirectional')
+                                        detected_skills = query_info.get('skills', [])
+                                        
+                                        if input_type != 'unknown':
+                                            st.info(f"🎯 **双向匹配结果** | 输入类型: {input_type} | 搜索方向: {search_direction}")
+                                            if detected_skills:
+                                                st.info(f"🔧 **检测到的技能**: {', '.join(detected_skills)}")
+                                else:
+                                    # 如果语义搜索失败，降级到关键词搜索
+                                    results = search_emails_in_cache(emails, query)
+                                    # 应用筛选器
+                                    filtered_results = []
+                                    for result in results:
+                                        if sender_filter and sender_filter.lower() not in result.get('sender', '').lower():
+                                            continue
+                                        if subject_filter and subject_filter.lower() not in result.get('subject', '').lower():
+                                            continue
+                                        if has_attachment and not result.get('attachments'):
+                                            continue
+                                        filtered_results.append(result)
+                                    results = filtered_results
+                                    st.warning("⚠️ 智能搜索引擎初始化失败，已降级到关键词搜索")
+                            else:
+                                results = []
+                        else:
+                            # 使用技能匹配搜索（最新缓存）
+                            search_results, query_info = st.session_state.search_engine.intelligent_skill_search(query, search_config.get('max_results', 20))
                             
-                            results.append({
-                                'uid': result.email_id,
-                                'subject': result.subject,
-                                'sender': result.sender,
-                                'date': result.date,
-                                'preview': result.preview,
-                                'folder': result.folder,
-                                'attachments': result.attachments,
-                                'score': result.score,
-                                'body_text': result.body_text  # 添加完整正文字段
-                            })
-                        
-                        # 显示双向匹配信息
-                        if isinstance(query_info, dict) and query_info.get('query_type') != 'general':
-                            # 显示输入类型和搜索方向
-                            input_type_map = {
-                                'person': '👤 人员信息',
-                                'project': '📋 项目需求',
-                                'mixed': '🔄 混合信息',
-                                'unknown': '❓ 未知类型'
-                            }
+                            # 转换为统一格式并应用筛选器
+                            results = []
+                            for result in search_results:
+                                # 应用筛选器
+                                if sender_filter and sender_filter.lower() not in result.sender.lower():
+                                    continue
+                                if subject_filter and subject_filter.lower() not in result.subject.lower():
+                                    continue
+                                if has_attachment and not result.attachments:
+                                    continue
+                                
+                                results.append({
+                                    'uid': result.email_id,
+                                    'subject': result.subject,
+                                    'sender': result.sender,
+                                    'date': result.date,
+                                    'preview': result.preview,
+                                    'folder': result.folder,
+                                    'attachments': result.attachments,
+                                    'score': result.score,
+                                    'body_text': result.body_text  # 添加完整正文字段
+                                })
                             
-                            direction_map = {
-                                'person_to_project': '👤 → 📋 人员匹配项目',
-                                'project_to_person': '📋 → 👤 项目匹配人员',
-                                'bidirectional': '🔄 双向匹配'
-                            }
-                            
-                            input_type = query_info.get('input_type', 'unknown')
-                            search_direction = query_info.get('search_direction', 'bidirectional')
-                            
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.info(f"📝 输入类型：{input_type_map.get(input_type, input_type)}")
-                            with col2:
-                                st.info(f"🎯 搜索方向：{direction_map.get(search_direction, search_direction)}")
-                            
-                            # 显示检测到的技能
-                            if query_info.get('skills'):
-                                st.success(f"💡 检测到技能：{', '.join(query_info.get('skills', []))}")
-                            
-                            # 显示经验年限
-                            if query_info.get('experience_years'):
-                                st.success(f"📅 经验年限：{query_info['experience_years']}年")
+                            # 显示双向匹配信息
+                            if isinstance(query_info, dict) and query_info.get('query_type') != 'general':
+                                # 显示输入类型和搜索方向
+                                input_type_map = {
+                                    'person': '👤 人员信息',
+                                    'project': '📋 项目需求',
+                                    'mixed': '🔄 混合信息',
+                                    'unknown': '❓ 未知类型'
+                                }
+                                
+                                direction_map = {
+                                    'person_to_project': '👤 → 📋 人员匹配项目',
+                                    'project_to_person': '📋 → 👤 项目匹配人员',
+                                    'bidirectional': '🔄 双向匹配'
+                                }
+                                
+                                input_type = query_info.get('input_type', 'unknown')
+                                search_direction = query_info.get('search_direction', 'bidirectional')
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.info(f"📝 输入类型：{input_type_map.get(input_type, input_type)}")
+                                with col2:
+                                    st.info(f"🎯 搜索方向：{direction_map.get(search_direction, search_direction)}")
+                                
+                                # 显示检测到的技能
+                                if query_info.get('skills'):
+                                    st.success(f"💡 检测到技能：{', '.join(query_info.get('skills', []))}")
+                                
+                                # 显示经验年限
+                                if query_info.get('experience_years'):
+                                    st.success(f"📅 经验年限：{query_info['experience_years']}年")
                     else:
                         # 使用实时搜索
                         results = st.session_state.email_connector.search_emails_realtime(query)
@@ -835,7 +1004,7 @@ def perform_search(query: str, search_config: Dict, sender_filter: str = "", sub
     
     # 执行搜索
     if search_mode == "智能搜索":
-        results, _ = st.session_state.search_engine.intelligent_skill_search(
+        results = st.session_state.search_engine.search(
             query=query,
             top_k=max_results
         )
@@ -845,7 +1014,7 @@ def perform_search(query: str, search_config: Dict, sender_filter: str = "", sub
             top_k=max_results
         )
     else:  # 混合搜索
-        semantic_results, _ = st.session_state.search_engine.intelligent_skill_search(
+        semantic_results = st.session_state.search_engine.search(
             query=query,
             top_k=max_results//2
         )
@@ -979,6 +1148,68 @@ def email_management_interface():
                 f"文件大小: {cache_info['file_size'] / 1024 / 1024:.1f} MB")
     else:
         st.warning("📁 暂无本地缓存数据")
+    
+    # 历史缓存文件管理
+    st.markdown("### 📂 历史缓存文件")
+    
+    # 获取历史缓存文件列表
+    historical_files = get_historical_cache_files()
+    
+    if historical_files:
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            # 选择历史缓存文件
+            selected_cache_file = st.selectbox(
+                "选择历史缓存文件",
+                options=["当前缓存 (latest_emails_cache.json)"] + [f"{file['filename']} ({file['readable_time']})" for file in historical_files],
+                help="选择要加载的历史缓存文件"
+            )
+        
+        with col2:
+            # 加载历史缓存文件
+            if st.button("🔄 加载历史缓存", help="加载选定的历史缓存文件"):
+                if selected_cache_file.startswith("当前缓存"):
+                    # 重新加载当前缓存
+                    try:
+                        emails_data = load_emails_from_cache()
+                        if emails_data:
+                            st.session_state.emails_data = emails_data
+                            st.session_state.current_cache_source = "latest_emails_cache.json"
+                            st.success("✅ 当前缓存已重新加载")
+                        else:
+                            st.error("❌ 当前缓存文件为空或不存在")
+                    except Exception as e:
+                        st.error(f"❌ 加载当前缓存失败: {str(e)}")
+                else:
+                    # 加载历史缓存文件
+                    try:
+                        # 从选择的文件名中提取实际文件名
+                        filename = selected_cache_file.split(" (")[0]
+                        emails_data = load_emails_from_specific_cache(filename)
+                        if emails_data:
+                            st.session_state.emails_data = emails_data
+                            st.session_state.current_cache_source = filename
+                            st.success(f"✅ 历史缓存文件 '{filename}' 已加载，包含 {len(emails_data)} 封邮件")
+                            
+                            # 重建搜索索引
+                            rebuild_search_index()
+                        else:
+                            st.error(f"❌ 历史缓存文件 '{filename}' 为空或不存在")
+                    except Exception as e:
+                        st.error(f"❌ 加载历史缓存文件失败: {str(e)}")
+        
+        # 显示当前加载的缓存源
+        current_source = getattr(st.session_state, 'current_cache_source', 'latest_emails_cache.json')
+        st.info(f"📋 当前数据源: {current_source}")
+        
+        # 显示历史缓存文件列表
+        with st.expander("📋 查看所有历史缓存文件"):
+            for file_info in historical_files:
+                file_size_mb = file_info['file_size'] / (1024 * 1024)  # 转换为MB
+                st.text(f"📄 {file_info['filename']} - {file_info['readable_time']} ({file_size_mb:.1f} MB)")
+    else:
+        st.info("📂 暂无历史缓存文件")
     
     # 同步配置选项
     st.markdown("### ⚙️ 同步配置")

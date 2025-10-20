@@ -707,6 +707,156 @@ def load_email_config(config_name: str = "default",
         if not os.path.exists(config_file):
             logger.warning(f"配置文件不存在: {config_file}")
             return None
+            
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            logger.info(f"成功加载配置: {config_name}")
+            return config
+            
+    except Exception as e:
+        logger.error(f"加载配置失败: {str(e)}")
+        return None
+
+
+def get_historical_cache_files(cache_dir: str = "./cache") -> List[Dict]:
+    """
+    获取历史缓存文件列表
+    
+    Args:
+        cache_dir: 缓存目录
+        
+    Returns:
+        List[Dict]: 历史缓存文件信息列表，包含文件名、时间戳、邮件数量等
+    """
+    try:
+        cache_files = []
+        
+        # 查找所有历史缓存文件
+        for filename in os.listdir(cache_dir):
+            if filename.startswith("emails_cache_") and filename.endswith(".json") and filename != "latest_emails_cache.json":
+                file_path = os.path.join(cache_dir, filename)
+                
+                try:
+                    # 读取文件信息
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        cache_data = json.load(f)
+                    
+                    # 提取时间戳
+                    timestamp = cache_data.get("timestamp", "")
+                    email_count = cache_data.get("email_count", 0)
+                    sync_time = cache_data.get("sync_time", "")
+                    file_size = os.path.getsize(file_path)
+                    
+                    # 解析时间戳为可读格式
+                    try:
+                        if timestamp:
+                            parsed_time = datetime.strptime(timestamp, "%Y%m%d_%H%M%S")
+                            readable_time = parsed_time.strftime("%Y-%m-%d %H:%M:%S")
+                        else:
+                            readable_time = "未知时间"
+                    except ValueError:
+                        readable_time = timestamp
+                    
+                    cache_files.append({
+                        "filename": filename,
+                        "file_path": file_path,
+                        "timestamp": timestamp,
+                        "readable_time": readable_time,
+                        "email_count": email_count,
+                        "sync_time": sync_time,
+                        "file_size": file_size
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"读取缓存文件 {filename} 失败: {str(e)}")
+                    continue
+        
+        # 按时间戳排序（最新的在前）
+        cache_files.sort(key=lambda x: x["timestamp"], reverse=True)
+        
+        logger.info(f"找到 {len(cache_files)} 个历史缓存文件")
+        return cache_files
+        
+    except Exception as e:
+        logger.error(f"获取历史缓存文件列表失败: {str(e)}")
+        return []
+
+
+def load_emails_from_specific_cache(cache_file_path: str) -> Optional[List]:
+    """
+    从指定的历史缓存文件加载邮件数据
+    
+    Args:
+        cache_file_path: 缓存文件的完整路径
+        
+    Returns:
+        Optional[List]: 邮件数据列表（EmailMessage对象），如果加载失败则返回None
+    """
+    try:
+        if not os.path.exists(cache_file_path):
+            logger.error(f"缓存文件不存在: {cache_file_path}")
+            return None
+        
+        with open(cache_file_path, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+        
+        email_dicts = cache_data.get("emails", [])
+        sync_time = cache_data.get("sync_time", "未知")
+        timestamp = cache_data.get("timestamp", "未知")
+        
+        # 将字典转换为EmailMessage对象
+        emails = [dict_to_email_message(email_dict) for email_dict in email_dicts]
+        
+        logger.info(f"从历史缓存文件加载了 {len(emails)} 封邮件，时间戳: {timestamp}，同步时间: {sync_time}")
+        return emails
+        
+    except Exception as e:
+        logger.error(f"从历史缓存文件加载邮件数据失败: {str(e)}")
+        return None
+
+
+def search_emails_in_cache(emails: List, query: str, search_fields: List[str] = None) -> List:
+    """
+    在指定的邮件列表中搜索
+    
+    Args:
+        emails: 邮件列表（EmailMessage对象）
+        query: 搜索查询
+        search_fields: 搜索字段列表，默认为['subject', 'sender', 'body_text']
+        
+    Returns:
+        List: 匹配的邮件列表
+    """
+    if not emails or not query:
+        return []
+    
+    if search_fields is None:
+        search_fields = ['subject', 'sender', 'body_text']
+    
+    try:
+        query_lower = query.lower()
+        matched_emails = []
+        
+        for email in emails:
+            match_found = False
+            
+            # 在指定字段中搜索
+            for field in search_fields:
+                if hasattr(email, field):
+                    field_value = getattr(email, field)
+                    if field_value and query_lower in str(field_value).lower():
+                        match_found = True
+                        break
+            
+            if match_found:
+                matched_emails.append(email)
+        
+        logger.info(f"在 {len(emails)} 封邮件中找到 {len(matched_emails)} 封匹配的邮件")
+        return matched_emails
+        
+    except Exception as e:
+        logger.error(f"搜索邮件失败: {str(e)}")
+        return []
         
         with open(config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
