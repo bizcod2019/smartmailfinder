@@ -32,6 +32,7 @@ class SearchResult:
     preview: str
     folder: str
     attachments: List[str]
+    body_text: str = ""  # 添加完整正文字段
 
 class SemanticSearchEngine:
     """语义搜索引擎类"""
@@ -334,10 +335,19 @@ class SemanticSearchEngine:
             texts = []
             metadata = []
             
-            for email in emails:
+            for i, email in enumerate(emails):
                 # 组合邮件文本用于向量化
                 combined_text = self._prepare_email_text(email)
                 texts.append(combined_text)
+                
+                # 调试日志 - 检查前几封邮件的数据
+                if i < 3:
+                    logger.info(f"构建索引 - 邮件 {i}: {email.uid}")
+                    logger.info(f"  - subject: {email.subject[:50]}...")
+                    logger.info(f"  - body_text长度: {len(email.body_text)}")
+                    logger.info(f"  - body_html长度: {len(email.body_html)}")
+                    if len(email.body_text) == 0 and len(email.body_html) > 0:
+                        logger.info(f"  - 发现body_text为空但body_html有内容的邮件")
                 
                 # 保存元数据
                 metadata.append({
@@ -590,6 +600,22 @@ class SemanticSearchEngine:
                 # 生成预览
                 preview = self._generate_preview(metadata, query)
                 
+                # 获取完整正文内容 - 优先使用body_text，如果为空则从body_html转换
+                original_body_text = metadata.get('body_text', '')
+                body_html = metadata.get('body_html', '')
+                
+                logger.info(f"SearchResult创建 - 邮件ID: {metadata.get('uid', 'unknown')}")
+                logger.info(f"  - 原始body_text长度: {len(original_body_text)}")
+                logger.info(f"  - body_html长度: {len(body_html)}")
+                
+                full_body_text = original_body_text
+                if not full_body_text.strip() and body_html:
+                    # 如果body_text为空但有body_html，则清理HTML标签
+                    full_body_text = self._clean_html(body_html)
+                    logger.info(f"  - 从body_html转换后长度: {len(full_body_text)}")
+                else:
+                    logger.info(f"  - 使用原始body_text，长度: {len(full_body_text)}")
+                
                 result = SearchResult(
                     email_id=metadata['uid'],
                     score=float(score),
@@ -598,7 +624,8 @@ class SemanticSearchEngine:
                     date=metadata['date'],
                     preview=preview,
                     folder=metadata['folder'],
-                    attachments=metadata['attachments']
+                    attachments=metadata['attachments'],
+                    body_text=full_body_text
                 )
                 
                 results.append(result)
@@ -1199,6 +1226,22 @@ class SemanticSearchEngine:
             if score > 0:
                 preview = self._generate_preview(metadata, query)
                 
+                # 获取完整正文内容 - 优先使用body_text，如果为空则从body_html转换
+                original_body_text = metadata.get('body_text', '')
+                body_html = metadata.get('body_html', '')
+                
+                logger.info(f"关键词搜索SearchResult创建 - 邮件ID: {metadata.get('uid', 'unknown')}")
+                logger.info(f"  - 原始body_text长度: {len(original_body_text)}")
+                logger.info(f"  - body_html长度: {len(body_html)}")
+                
+                full_body_text = original_body_text
+                if not full_body_text.strip() and body_html:
+                    # 如果body_text为空但有body_html，则清理HTML标签
+                    full_body_text = self._clean_html(body_html)
+                    logger.info(f"  - 从body_html转换后长度: {len(full_body_text)}")
+                else:
+                    logger.info(f"  - 使用原始body_text，长度: {len(full_body_text)}")
+                
                 result = SearchResult(
                     email_id=metadata['uid'],
                     score=score,
@@ -1207,7 +1250,8 @@ class SemanticSearchEngine:
                     date=metadata['date'],
                     preview=preview,
                     folder=metadata['folder'],
-                    attachments=metadata['attachments']
+                    attachments=metadata['attachments'],
+                    body_text=full_body_text
                 )
                 
                 results.append(result)

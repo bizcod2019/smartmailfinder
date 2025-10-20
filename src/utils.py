@@ -241,9 +241,10 @@ def export_emails_to_csv(emails: List, filename: str = None) -> bytes:
         bytes: CSV数据
     """
     try:
+        logger.info("开始Excel导出，使用新的'正文'列名")
         # 准备数据
         export_data = []
-        for email in emails:
+        for i, email in enumerate(emails):
             # 跳过无效的数据类型
             if isinstance(email, str):
                 logger.warning(f"跳过字符串类型的邮件数据: {email[:100]}...")
@@ -303,7 +304,7 @@ def export_emails_to_excel(emails: List, filename: str = None) -> bytes:
     try:
         # 准备数据
         export_data = []
-        for email in emails:
+        for i, email in enumerate(emails):
             # 跳过无效的数据类型
             if isinstance(email, str):
                 logger.warning(f"跳过字符串类型的邮件数据: {email[:100]}...")
@@ -311,10 +312,27 @@ def export_emails_to_excel(emails: List, filename: str = None) -> bytes:
                 
             # 处理SearchResult对象或字典
             if hasattr(email, 'subject'):  # SearchResult对象
+                # 调试日志
+                logger.info(f"邮件 {i}: SearchResult对象")
+                logger.info(f"  - body_text长度: {len(email.body_text) if hasattr(email, 'body_text') and email.body_text else 0}")
+                logger.info(f"  - preview长度: {len(email.preview) if email.preview else 0}")
+                
                 # 处理日期时间，移除时区信息
                 date_value = email.date
                 if hasattr(date_value, 'replace') and hasattr(date_value, 'tzinfo') and date_value.tzinfo is not None:
                     date_value = date_value.replace(tzinfo=None)
+                
+                # 获取完整正文内容
+                # SearchResult对象的body_text现在应该包含完整的正文内容（包括从HTML转换的文本）
+                full_content = ""
+                
+                if hasattr(email, 'body_text') and email.body_text and email.body_text.strip():
+                    full_content = email.body_text.strip()
+                    logger.info(f"  - 使用body_text，长度: {len(full_content)}")
+                else:
+                    # 如果仍然为空，使用preview作为备选
+                    full_content = email.preview if email.preview else email.subject
+                    logger.info(f"  - body_text为空，使用preview/subject，长度: {len(full_content)}")
                 
                 export_data.append({
                     '主题': email.subject,
@@ -323,14 +341,36 @@ def export_emails_to_excel(emails: List, filename: str = None) -> bytes:
                     '文件夹': email.folder,
                     '附件数量': len(email.attachments),
                     '附件列表': ', '.join(email.attachments),
-                    '正文预览': email.preview,
+                    '正文': full_content,
                     '相关度': f"{email.score:.2%}"
                 })
             elif isinstance(email, dict):  # 字典对象
+                # 调试日志
+                logger.info(f"邮件 {i}: 字典对象")
+                body_text = email.get('body_text', '')
+                body_html = email.get('body_html', '')
+                logger.info(f"  - body_text长度: {len(body_text) if body_text else 0}")
+                logger.info(f"  - body_html长度: {len(body_html) if body_html else 0}")
+                logger.info(f"  - 字典键: {list(email.keys())}")
+                
                 # 处理日期时间，移除时区信息
                 date_value = email.get('date', '')
                 if hasattr(date_value, 'replace') and hasattr(date_value, 'tzinfo') and date_value.tzinfo is not None:
                     date_value = date_value.replace(tzinfo=None)
+                
+                # 获取完整正文内容 - 优先使用body_text，然后body_html，最后才是subject
+                full_content = ""
+                
+                if body_text:
+                    full_content = body_text
+                    logger.info(f"  - 使用body_text，长度: {len(full_content)}")
+                elif body_html:
+                    full_content = clean_html_tags(body_html)
+                    logger.info(f"  - 使用body_html，清理后长度: {len(full_content)}")
+                else:
+                    # 如果都没有，使用主题作为内容
+                    full_content = email.get('subject', '无内容')
+                    logger.info(f"  - 使用subject作为内容，长度: {len(full_content)}")
                 
                 export_data.append({
                     '主题': email.get('subject', ''),
@@ -340,7 +380,7 @@ def export_emails_to_excel(emails: List, filename: str = None) -> bytes:
                     '文件夹': email.get('folder', ''),
                     '附件数量': len(email.get('attachments', [])),
                     '附件列表': ', '.join(email.get('attachments', [])),
-                    '正文预览': format_email_preview(email, 200)
+                    '正文': full_content
                 })
             else:
                 logger.warning(f"跳过未知类型的邮件数据: {type(email)}")
@@ -360,6 +400,7 @@ def export_emails_to_excel(emails: List, filename: str = None) -> bytes:
             for column in worksheet.columns:
                 max_length = 0
                 column_letter = column[0].column_letter
+                column_name = column[0].value  # 获取列名
                 
                 for cell in column:
                     try:
@@ -369,7 +410,14 @@ def export_emails_to_excel(emails: List, filename: str = None) -> bytes:
                         logger.debug(f"计算列宽时跳过单元格: {str(e)}")
                         continue
                 
-                adjusted_width = min(max_length + 2, 50)
+                # 为正文列设置特殊宽度
+                if column_name == '正文':
+                    adjusted_width = 80  # 正文列设置为80
+                elif column_name == '主题':
+                    adjusted_width = min(max_length + 2, 60)  # 主题列最大60
+                else:
+                    adjusted_width = min(max_length + 2, 30)  # 其他列最大30
+                    
                 worksheet.column_dimensions[column_letter].width = adjusted_width
         
         # 如果提供了文件名，保存到文件

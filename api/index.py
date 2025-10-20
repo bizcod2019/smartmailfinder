@@ -739,7 +739,8 @@ def search_interface(search_config: Dict):
                                 'preview': result.preview,
                                 'folder': result.folder,
                                 'attachments': result.attachments,
-                                'score': result.score
+                                'score': result.score,
+                                'body_text': result.body_text  # 添加完整正文字段
                             })
                         
                         # 显示双向匹配信息
@@ -886,21 +887,8 @@ def display_search_results(results: List, query: str, search_time: float = 0):
     
     # 导出选项 - 使用session_state中保存的结果
     export_results = display_results
-    col1, col2, col3 = st.columns([1, 1, 2])
+    col1, col2 = st.columns([1, 3])
     with col1:
-        try:
-            csv_data = export_emails_to_csv(export_results)
-            st.download_button(
-                label="📊 导出CSV",
-                data=csv_data,
-                file_name=f"search_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-        except Exception as e:
-            logger.error(f"CSV导出失败: {str(e)}")
-            st.error("CSV导出失败")
-    
-    with col2:
         try:
             excel_data = export_emails_to_excel(export_results)
             st.download_button(
