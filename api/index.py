@@ -756,9 +756,10 @@ def search_interface(search_config: Dict):
                                 date_part = selected_cache_file.split(" (")[0]
                             else:
                                 date_part = selected_cache_file
-                            # 构造完整的文件名
+                            # 构造完整的文件路径
                             cache_filename = f"emails_cache_{date_part}.json"
-                            emails = load_emails_from_specific_cache(cache_filename)
+                            cache_file_path = os.path.join("./cache", cache_filename)
+                            emails = load_emails_from_specific_cache(cache_file_path)
                             if emails:
                                 # 创建临时的语义搜索引擎实例用于历史缓存
                                 from src.semantic_search import SemanticSearchEngine
@@ -819,9 +820,10 @@ def search_interface(search_config: Dict):
                                 date_part = selected_cache_file.split(" (")[0]
                             else:
                                 date_part = selected_cache_file
-                            # 构造完整的文件名
+                            # 构造完整的文件路径
                             cache_filename = f"emails_cache_{date_part}.json"
-                            emails = load_emails_from_specific_cache(cache_filename)
+                            cache_file_path = os.path.join("./cache", cache_filename)
+                            emails = load_emails_from_specific_cache(cache_file_path)
                             if emails:
                                 # 创建临时的语义搜索引擎实例用于历史缓存
                                 from src.semantic_search import SemanticSearchEngine
