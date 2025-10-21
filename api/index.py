@@ -1,5 +1,5 @@
 """智能邮件搜索工具 - 主应用文件
-基于Streamlit + Vercel + 阿里云OSS的邮件语义搜索系统
+基于Streamlit + 阿里云OSS的邮件语义搜索系统
 """
 
 import streamlit as st
@@ -140,12 +140,35 @@ def init_session_state():
 # 初始化
 init_session_state()
 
-# 自动加载缓存的邮件数据
+# 自动加载邮件数据（优先从OSS加载）
 if not st.session_state.emails_data:
-    cached_emails = load_emails_from_cache()
-    if cached_emails:
-        st.session_state.emails_data = cached_emails
-        logger.info(f"自动加载了 {len(cached_emails)} 封缓存邮件")
+    emails_loaded = False
+    
+    # 优先尝试从OSS加载
+    if st.session_state.oss_storage:
+        try:
+            oss_emails = st.session_state.oss_storage.download_emails_index()
+            if oss_emails:
+                st.session_state.emails_data = oss_emails
+                logger.info(f"从OSS加载了 {len(oss_emails)} 封邮件")
+                emails_loaded = True
+        except Exception as e:
+            logger.warning(f"从OSS加载邮件失败: {e}")
+    
+    # 如果OSS加载失败，尝试从本地缓存加载
+    if not emails_loaded:
+        cached_emails = load_emails_from_cache()
+        if cached_emails:
+            st.session_state.emails_data = cached_emails
+            logger.info(f"从本地缓存加载了 {len(cached_emails)} 封邮件")
+            
+            # 如果有OSS存储，将本地缓存上传到OSS
+            if st.session_state.oss_storage:
+                try:
+                    st.session_state.oss_storage.upload_emails_index(cached_emails)
+                    logger.info("本地缓存已同步到OSS")
+                except Exception as e:
+                    logger.warning(f"同步到OSS失败: {e}")
 
 # 加载配置
 @st.cache_data(ttl=300)  # 5分钟缓存
@@ -169,6 +192,27 @@ try:
 except Exception as e:
     logger.error(f"Failed to create cache directory: {str(e)}")
     cache_dir = './cache'
+
+# 初始化OSS存储
+if st.session_state.oss_storage is None:
+    try:
+        from src.oss_storage import OSSStorage
+        oss_config = config.get('oss', {})
+        
+        # 检查OSS配置是否完整
+        required_keys = ['access_key_id', 'access_key_secret', 'bucket_name', 'endpoint']
+        if all(key in oss_config and oss_config[key] for key in required_keys):
+            st.session_state.oss_storage = OSSStorage(
+                access_key_id=oss_config['access_key_id'],
+                access_key_secret=oss_config['access_key_secret'],
+                endpoint=oss_config['endpoint'],
+                bucket_name=oss_config['bucket_name']
+            )
+            logger.info("OSS存储初始化成功")
+        else:
+            logger.warning("OSS配置不完整，将使用本地存储")
+    except Exception as e:
+        logger.error(f"OSS存储初始化失败: {e}")
 
 # 健康检查处理（/?health=1 或 /?health=TOKEN）
 def handle_healthcheck() -> bool:
@@ -426,19 +470,49 @@ def display_system_status():
     emails_count = len(st.session_state.emails_data)
     st.metric("已索引邮件", f"{emails_count:,}")
     
-    if st.session_state.connection_status:
-        st.success("🟢 邮箱已连接")
-    else:
-        st.error("🔴 邮箱未连接")
+    # 系统组件状态
+    col1, col2, col3 = st.columns(3)
     
-    if st.session_state.search_engine:
-        st.success("🟢 搜索引擎已就绪")
-    else:
-        st.warning("🟡 搜索引擎未初始化")
+    with col1:
+        if st.session_state.connection_status:
+            st.success("🟢 邮箱已连接")
+        else:
+            st.error("🔴 邮箱未连接")
+    
+    with col2:
+        if st.session_state.search_engine:
+            st.success("🟢 搜索引擎已就绪")
+        else:
+            st.warning("🟡 搜索引擎未初始化")
+    
+    with col3:
+        # OSS存储状态
+        if st.session_state.oss_storage:
+            try:
+                # 测试OSS连接
+                st.session_state.oss_storage.test_connection()
+                st.success("☁️ OSS存储已连接")
+            except Exception as e:
+                st.error(f"☁️ OSS存储连接失败")
+                if st.session_state.debug_mode:
+                    st.error(f"错误详情: {str(e)}")
+        else:
+            st.warning("☁️ OSS存储未配置")
     
     # 显示最后同步时间
     if st.session_state.last_sync_time:
         st.info(f"最后同步: {st.session_state.last_sync_time.strftime('%Y-%m-%d %H:%M')}")
+    
+    # 存储信息
+    if st.session_state.oss_storage:
+        try:
+            storage_info = st.session_state.oss_storage.get_storage_usage()
+            if storage_info:
+                st.info(f"☁️ OSS存储: {storage_info.get('object_count', 0)} 个对象, "
+                       f"{storage_info.get('total_size', 0) / 1024 / 1024:.2f} MB")
+        except Exception as e:
+            if st.session_state.debug_mode:
+                st.warning(f"获取OSS存储信息失败: {str(e)}")
     
     # 错误计数
     if st.session_state.error_count > 0:
@@ -1172,13 +1246,29 @@ def email_management_interface():
             # 加载历史缓存文件
             if st.button("🔄 加载历史缓存", help="加载选定的历史缓存文件"):
                 if selected_cache_file.startswith("当前缓存"):
-                    # 重新加载当前缓存
+                    # 重新加载当前缓存（优先从OSS）
                     try:
-                        emails_data = load_emails_from_cache()
+                        emails_data = None
+                        source_info = ""
+                        
+                        # 优先从OSS加载
+                        if st.session_state.oss_storage:
+                            try:
+                                emails_data = st.session_state.oss_storage.download_emails_index()
+                                if emails_data:
+                                    source_info = "（从OSS加载）"
+                            except Exception as e:
+                                logger.warning(f"从OSS加载失败: {e}")
+                        
+                        # 如果OSS加载失败，从本地缓存加载
+                        if not emails_data:
+                            emails_data = load_emails_from_cache()
+                            source_info = "（从本地缓存加载）"
+                        
                         if emails_data:
                             st.session_state.emails_data = emails_data
                             st.session_state.current_cache_source = "latest_emails_cache.json"
-                            st.success("✅ 当前缓存已重新加载")
+                            st.success(f"✅ 当前缓存已重新加载{source_info}")
                         else:
                             st.error("❌ 当前缓存文件为空或不存在")
                     except Exception as e:
@@ -1338,14 +1428,38 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
             st.session_state.emails_data = all_emails
             st.session_state.last_sync_time = datetime.now()
             
-            # 保存邮件数据到本地
+            # 保存邮件数据
+            storage_success = False
+            
+            # 优先保存到OSS
+            if st.session_state.oss_storage:
+                try:
+                    st.session_state.oss_storage.upload_emails_index(all_emails)
+                    st.info(f"☁️ 邮件数据已保存到阿里云OSS")
+                    storage_success = True
+                except Exception as e:
+                    logger.warning(f"保存邮件数据到OSS失败: {str(e)}")
+                    st.warning(f"⚠️ OSS保存失败: {str(e)}")
+            
+            # 同时保存到本地缓存作为备份
             try:
                 save_emails_to_cache(all_emails)
-                st.info(f"📁 邮件数据已保存到本地缓存")
+                if not storage_success:
+                    st.info(f"📁 邮件数据已保存到本地缓存")
+                else:
+                    st.info(f"📁 邮件数据已同步到本地缓存（备份）")
             except Exception as e:
-                logger.warning(f"保存邮件数据到缓存失败: {str(e)}")
+                logger.warning(f"保存邮件数据到本地缓存失败: {str(e)}")
+                if storage_success:
+                    st.warning(f"⚠️ 本地缓存保存失败: {str(e)}")
             
-            st.success(f"✅ 成功同步 {len(all_emails)} 封邮件")
+            # 显示存储状态
+            if st.session_state.oss_storage and storage_success:
+                st.success(f"✅ 成功同步 {len(all_emails)} 封邮件（已保存到OSS和本地缓存）")
+            elif storage_success or st.session_state.oss_storage is None:
+                st.success(f"✅ 成功同步 {len(all_emails)} 封邮件")
+            else:
+                st.error(f"❌ 邮件同步完成但存储失败，请检查OSS配置")
             logger.info(f"Synced {len(all_emails)} emails")
             
             # 自动重建搜索索引

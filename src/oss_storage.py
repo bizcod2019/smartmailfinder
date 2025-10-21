@@ -448,32 +448,74 @@ class OSSStorage:
         """
         if not self.is_connected:
             return 0
+    
+    def upload_emails_index(self, emails_data: List[Dict]) -> bool:
+        """
+        上传邮件数据到OSS
+        
+        Args:
+            emails_data: 邮件数据列表
+            
+        Returns:
+            bool: 上传是否成功
+        """
+        if not self.is_connected:
+            logger.error("OSS未连接")
+            return False
         
         try:
-            # 获取所有备份文件
-            backups = []
-            for obj in oss2.ObjectIterator(self.bucket, prefix=self.paths['indices']):
-                if '_backup_' in obj.key:
-                    backups.append((obj.key, obj.last_modified))
+            # 创建临时文件保存邮件数据
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                json.dump(emails_data, temp_file, ensure_ascii=False, indent=2, default=str)
+                temp_file_path = temp_file.name
             
-            # 按时间排序，保留最新的
-            backups.sort(key=lambda x: x[1], reverse=True)
+            # 上传到OSS
+            oss_key = f"{self.paths['cache']}emails_data.json"
+            self._upload_file_with_compression(temp_file_path, oss_key)
             
-            deleted_count = 0
-            for backup_key, _ in backups[keep_count:]:
-                try:
-                    # 提取备份名称
-                    backup_name = os.path.basename(backup_key).replace('.faiss', '').replace('.gz', '')
-                    
-                    # 删除相关文件
-                    self.delete_index(backup_name)
-                    deleted_count += 1
-                except Exception as e:
-                    logger.error(f"删除备份失败: {backup_key}, {str(e)}")
+            # 清理临时文件
+            os.unlink(temp_file_path)
             
-            logger.info(f"清理完成，删除了 {deleted_count} 个旧备份")
-            return deleted_count
+            logger.info(f"邮件数据已上传到OSS: {len(emails_data)} 封邮件")
+            return True
             
         except Exception as e:
-            logger.error(f"清理备份失败: {str(e)}")
-            return 0
+            logger.error(f"上传邮件数据失败: {str(e)}")
+            return False
+    
+    def download_emails_index(self) -> Optional[List[Dict]]:
+        """
+        从OSS下载邮件数据
+        
+        Returns:
+            Optional[List[Dict]]: 邮件数据列表，失败时返回None
+        """
+        if not self.is_connected:
+            logger.error("OSS未连接")
+            return None
+        
+        try:
+            # 创建临时文件
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                temp_file_path = temp_file.name
+            
+            # 从OSS下载
+            oss_key = f"{self.paths['cache']}emails_data.json"
+            if self._download_file_with_decompression(oss_key, temp_file_path):
+                # 读取邮件数据
+                with open(temp_file_path, 'r', encoding='utf-8') as f:
+                    emails_data = json.load(f)
+                
+                # 清理临时文件
+                os.unlink(temp_file_path)
+                
+                logger.info(f"从OSS下载了 {len(emails_data)} 封邮件")
+                return emails_data
+            else:
+                # 清理临时文件
+                os.unlink(temp_file_path)
+                return None
+                
+        except Exception as e:
+            logger.error(f"下载邮件数据失败: {str(e)}")
+            return None
