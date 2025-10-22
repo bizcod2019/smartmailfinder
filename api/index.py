@@ -22,7 +22,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 添加项目根目录到Python路径
-project_root = os.path.dirname(os.path.dirname(__file__))
+# 兼容Streamlit Cloud和Vercel部署
+if os.path.basename(os.path.dirname(__file__)) == 'api':
+    # Vercel部署：当前文件在api目录下
+    project_root = os.path.dirname(os.path.dirname(__file__))
+else:
+    # Streamlit Cloud部署：当前文件在根目录下
+    project_root = os.path.dirname(__file__)
 sys.path.insert(0, project_root)
 
 # 导入自定义模块
