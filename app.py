@@ -12,14 +12,16 @@ sys.path.insert(0, project_root)
 
 # 导入主应用模块
 try:
-    # 从api/index.py导入所有内容
-    from api.index import *
+    # 从api/index.py导入主函数
+    from api.index import main
 except ImportError as e:
     st.error(f"模块导入失败: {str(e)}")
     st.error("请确保所有依赖都已正确安装")
     st.stop()
 
-# 主应用已经在api/index.py中定义，这里只需要导入即可
+# 调用主函数
 if __name__ == "__main__":
-    # 应用已经通过导入api.index自动运行
-    pass
+    main()
+else:
+    # 当作为模块导入时也运行主函数
+    main()

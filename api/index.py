@@ -147,13 +147,13 @@ def init_session_state():
 init_session_state()
 
 # 自动加载邮件数据（优先从OSS加载）
-if not st.session_state.emails_data:
+if not st.session_state.get('emails_data', []):
     emails_loaded = False
     
     # 优先尝试从OSS加载
-    if st.session_state.oss_storage:
+    if st.session_state.get('oss_storage'):
         try:
-            oss_emails = st.session_state.oss_storage.download_emails_index()
+            oss_emails = st.session_state.get('oss_storage').download_emails_index()
             if oss_emails:
                 st.session_state.emails_data = oss_emails
                 logger.info(f"从OSS加载了 {len(oss_emails)} 封邮件")
@@ -169,9 +169,9 @@ if not st.session_state.emails_data:
             logger.info(f"从本地缓存加载了 {len(cached_emails)} 封邮件")
             
             # 如果有OSS存储，将本地缓存上传到OSS
-            if st.session_state.oss_storage:
+            if st.session_state.get('oss_storage'):
                 try:
-                    st.session_state.oss_storage.upload_emails_index(cached_emails)
+                    st.session_state.get('oss_storage').upload_emails_index(cached_emails)
                     logger.info("本地缓存已同步到OSS")
                 except Exception as e:
                     logger.warning(f"同步到OSS失败: {e}")
@@ -200,7 +200,7 @@ except Exception as e:
     cache_dir = './cache'
 
 # 初始化OSS存储
-if st.session_state.oss_storage is None:
+if st.session_state.get('oss_storage') is None:
     try:
         from src.oss_storage import OSSStorage
         oss_config = config.get('oss', {})
@@ -422,11 +422,11 @@ def configure_email_settings() -> Dict:
                     else:
                         st.error("❌ 邮箱连接失败，请检查配置")
                         email_config['configured'] = False
-                        st.session_state.error_count += 1
+                        st.session_state.error_count = st.session_state.get('error_count', 0) + 1
                 except Exception as e:
                     st.error(f"❌ 连接错误: {str(e)}")
                     email_config['configured'] = False
-                    st.session_state.error_count += 1
+                    st.session_state.error_count = st.session_state.get('error_count', 0) + 1
                     logger.error(f"Email connection failed: {str(e)}")
         else:
             st.error("❌ 请填写完整的邮箱配置信息")
@@ -473,59 +473,59 @@ def configure_search_settings() -> Dict:
 
 def display_system_status():
     """显示系统状态"""
-    emails_count = len(st.session_state.emails_data)
+    emails_count = len(st.session_state.get('emails_data', []))
     st.metric("已索引邮件", f"{emails_count:,}")
     
     # 系统组件状态
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.session_state.connection_status:
+        if st.session_state.get('connection_status', False):
             st.success("🟢 邮箱已连接")
         else:
             st.error("🔴 邮箱未连接")
     
     with col2:
-        if st.session_state.search_engine:
+        if st.session_state.get('search_engine'):
             st.success("🟢 搜索引擎已就绪")
         else:
             st.warning("🟡 搜索引擎未初始化")
     
     with col3:
         # OSS存储状态
-        if st.session_state.oss_storage:
+        if st.session_state.get('oss_storage'):
             try:
                 # 测试OSS连接
-                st.session_state.oss_storage.test_connection()
+                st.session_state.get('oss_storage').test_connection()
                 st.success("☁️ OSS存储已连接")
             except Exception as e:
                 st.error(f"☁️ OSS存储连接失败")
-                if st.session_state.debug_mode:
+                if st.session_state.get('debug_mode', False):
                     st.error(f"错误详情: {str(e)}")
         else:
             st.warning("☁️ OSS存储未配置")
     
     # 显示最后同步时间
-    if st.session_state.last_sync_time:
-        st.info(f"最后同步: {st.session_state.last_sync_time.strftime('%Y-%m-%d %H:%M')}")
+    if st.session_state.get('last_sync_time'):
+        st.info(f"最后同步: {st.session_state.get('last_sync_time').strftime('%Y-%m-%d %H:%M')}")
     
     # 存储信息
-    if st.session_state.oss_storage:
+    if st.session_state.get('oss_storage'):
         try:
-            storage_info = st.session_state.oss_storage.get_storage_usage()
+            storage_info = st.session_state.get('oss_storage').get_storage_usage()
             if storage_info:
                 st.info(f"☁️ OSS存储: {storage_info.get('object_count', 0)} 个对象, "
                        f"{storage_info.get('total_size', 0) / 1024 / 1024:.2f} MB")
         except Exception as e:
-            if st.session_state.debug_mode:
+            if st.session_state.get('debug_mode', False):
                 st.warning(f"获取OSS存储信息失败: {str(e)}")
     
     # 错误计数
-    if st.session_state.error_count > 0:
-        st.warning(f"⚠️ 错误次数: {st.session_state.error_count}")
+    if st.session_state.get('error_count', 0) > 0:
+        st.warning(f"⚠️ 错误次数: {st.session_state.get('error_count', 0)}")
     
     # 调试模式开关
-    st.session_state.debug_mode = st.checkbox("调试模式", value=st.session_state.debug_mode)
+    st.session_state.debug_mode = st.checkbox("调试模式", value=st.session_state.get('debug_mode', False))
 
 @error_handler
 @performance_monitor
@@ -537,14 +537,14 @@ def search_interface(search_config: Dict):
         st.title("🔍 智能邮件搜索")
     with col2:
         # 显示搜索引擎状态
-        if st.session_state.search_engine:
+        if st.session_state.get('search_engine'):
             st.success("✅ 搜索就绪")
         else:
             st.error("❌ 未就绪")
     
     # 显示邮件统计信息
-    emails_count = len(st.session_state.emails_data)
-    indexed_count = len(st.session_state.search_engine.email_metadata) if st.session_state.search_engine else 0
+    emails_count = len(st.session_state.get('emails_data', []))
+    indexed_count = len(st.session_state.get('search_engine').email_metadata) if st.session_state.get('search_engine') else 0
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -559,9 +559,9 @@ def search_interface(search_config: Dict):
     st.divider()
     
     # 检查搜索引擎状态
-    if not st.session_state.search_engine:
+    if not st.session_state.get('search_engine'):
         # 如果有邮件数据但没有搜索引擎，自动重建索引
-        if st.session_state.emails_data:
+        if st.session_state.get('emails_data', []):
             st.info("🔄 检测到邮件数据，正在自动初始化搜索引擎...")
             rebuild_search_index()
             st.rerun()
@@ -696,18 +696,18 @@ def search_interface(search_config: Dict):
         search_mode = st.radio(
             "选择搜索模式：",
             options=["智能搜索", "技能匹配搜索", "实时搜索"],
-            index=0 if st.session_state.search_engine else 2,
+            index=0 if st.session_state.get('search_engine') else 2,
             horizontal=True,
             help="智能搜索：基于AI语义理解；技能匹配搜索：双向匹配程序员技能和项目需求；实时搜索：直接查询邮件服务器"
         )
     with col2:
         if search_mode in ["智能搜索", "技能匹配搜索"]:
-            if st.session_state.search_engine:
+            if st.session_state.get('search_engine'):
                 st.success("✅ 可用")
             else:
                 st.error("❌ 需同步")
         else:
-            if st.session_state.email_connector:
+            if st.session_state.get('email_connector'):
                 st.success("✅ 可用")
             else:
                 st.error("❌ 需配置")
@@ -742,21 +742,21 @@ def search_interface(search_config: Dict):
     
     # 根据搜索模式显示不同的提示
     if search_mode == "智能搜索":
-        search_disabled = not st.session_state.search_engine
+        search_disabled = not st.session_state.get('search_engine')
         if search_disabled:
             st.warning("⚠️ 智能搜索需要先同步邮件。您可以切换到实时搜索模式或先同步邮件。")
         else:
             cache_info = "最新缓存" if selected_cache_file is None or selected_cache_file == "最新" else f"历史缓存 ({selected_cache_file})"
             st.info(f"💡 智能搜索支持自然语言查询，当前数据源：{cache_info}\n例如：'昨天的会议邮件'、'包含附件的重要邮件'、'来自客户的报价单'等")
     elif search_mode == "技能匹配搜索":
-        search_disabled = not st.session_state.search_engine
+        search_disabled = not st.session_state.get('search_engine')
         if search_disabled:
             st.warning("⚠️ 技能匹配搜索需要先同步邮件。您可以切换到实时搜索模式或先同步邮件。")
         else:
             cache_info = "最新缓存" if selected_cache_file is None or selected_cache_file == "最新" else f"历史缓存 ({selected_cache_file})"
             st.info(f"🎯 技能匹配搜索支持双向匹配，当前数据源：{cache_info}\n• 输入人员技能 → 匹配项目需求\n• 输入项目需求 → 匹配相关人员\n例如：'4年Java程序员，会Vue3、SpringBoot、MyBatis' 或 '招聘Python开发工程师，要求3年以上经验'")
     else:
-        search_disabled = not st.session_state.email_connector
+        search_disabled = not st.session_state.get('email_connector')
         if search_disabled:
             st.warning("⚠️ 实时搜索需要先配置邮箱连接。")
         else:
@@ -810,9 +810,9 @@ def search_interface(search_config: Dict):
     if search_button and query:
         if not validate_search_query(query):
             st.error("❌ 请输入有效的搜索内容")
-        elif search_mode in ["智能搜索", "技能匹配搜索"] and not st.session_state.search_engine:
+        elif search_mode in ["智能搜索", "技能匹配搜索"] and not st.session_state.get('search_engine'):
             st.error("❌ 请先同步邮件建立搜索索引")
-        elif search_mode == "实时搜索" and not st.session_state.email_connector:
+        elif search_mode == "实时搜索" and not st.session_state.get('email_connector'):
             st.error("❌ 请先配置邮箱连接")
         else:
             if search_mode == "智能搜索":
@@ -969,7 +969,7 @@ def search_interface(search_config: Dict):
                                 results = []
                         else:
                             # 使用技能匹配搜索（最新缓存）
-                            search_results, query_info = st.session_state.search_engine.intelligent_skill_search(query, search_config.get('max_results', 20))
+                            search_results, query_info = st.session_state.get('search_engine').intelligent_skill_search(query, search_config.get('max_results', 20))
                             
                             # 转换为统一格式并应用筛选器
                             results = []
@@ -1028,7 +1028,7 @@ def search_interface(search_config: Dict):
                                     st.success(f"📅 经验年限：{query_info['experience_years']}年")
                     else:
                         # 使用实时搜索
-                        results = st.session_state.email_connector.search_emails_realtime(query)
+                        results = st.session_state.get('email_connector').search_emails_realtime(query)
                         # 应用筛选器
                         if sender_filter:
                             results = [r for r in results if sender_filter.lower() in r.sender.lower()]
@@ -1048,6 +1048,8 @@ def search_interface(search_config: Dict):
                     
                     # 保存搜索历史
                     save_search_history(query, len(results))
+                    if 'search_history' not in st.session_state:
+                        st.session_state.search_history = []
                     st.session_state.search_history.append({
                         'query': query,
                         'results_count': len(results),
@@ -1058,9 +1060,9 @@ def search_interface(search_config: Dict):
                     
                 except Exception as e:
                     st.error(f"❌ 搜索失败: {str(e)}")
-                    st.session_state.error_count += 1
+                    st.session_state.error_count = st.session_state.get('error_count', 0) + 1
                     logger.error(f"Search failed: {str(e)}")
-                    if st.session_state.debug_mode:
+                    if st.session_state.get('debug_mode', False):
                         st.code(traceback.format_exc())
 
     # 页面重新运行（例如点击导出按钮）时，若未点击搜索按钮但已有上次搜索结果，则保持显示
@@ -1086,21 +1088,21 @@ def perform_search(query: str, search_config: Dict, sender_filter: str = "", sub
     
     # 执行搜索
     if search_mode == "智能搜索":
-        results = st.session_state.search_engine.search(
+        results = st.session_state.get('search_engine').search(
             query=query,
             top_k=max_results
         )
     elif search_mode == "关键词搜索":
-        results = st.session_state.search_engine.keyword_search(
+        results = st.session_state.get('search_engine').keyword_search(
             query=query,
             top_k=max_results
         )
     else:  # 混合搜索
-        semantic_results = st.session_state.search_engine.search(
+        semantic_results = st.session_state.get('search_engine').search(
             query=query,
             top_k=max_results//2
         )
-        keyword_results = st.session_state.search_engine.keyword_search(
+        keyword_results = st.session_state.get('search_engine').keyword_search(
             query=query,
             top_k=max_results//2
         )
@@ -1258,9 +1260,9 @@ def email_management_interface():
                         source_info = ""
                         
                         # 优先从OSS加载
-                        if st.session_state.oss_storage:
+                        if st.session_state.get('oss_storage'):
                             try:
-                                emails_data = st.session_state.oss_storage.download_emails_index()
+                                emails_data = st.session_state.get('oss_storage').download_emails_index()
                                 if emails_data:
                                     source_info = "（从OSS加载）"
                             except Exception as e:
@@ -1359,19 +1361,19 @@ def email_management_interface():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        total_emails = len(st.session_state.emails_data)
+        total_emails = len(st.session_state.get('emails_data', []))
         st.metric("总邮件数", f"{total_emails:,}")
     
     with col2:
-        indexed_emails = len(st.session_state.emails_data) if st.session_state.search_engine else 0
+        indexed_emails = len(st.session_state.get('emails_data', [])) if st.session_state.get('search_engine') else 0
         st.metric("已索引", f"{indexed_emails:,}")
     
     with col3:
         # 计算今日新增邮件
         today_emails = 0
-        if st.session_state.emails_data:
+        if st.session_state.get('emails_data', []):
             today = datetime.now().date()
-            today_emails = sum(1 for email in st.session_state.emails_data 
+            today_emails = sum(1 for email in st.session_state.get('emails_data', []) 
                              if email.date and 
                              isinstance(email.date, datetime) and 
                              email.date.date() == today)
@@ -1380,10 +1382,10 @@ def email_management_interface():
     with col4:
         # 计算存储使用量（估算）
         storage_usage = 0
-        if st.session_state.search_engine and hasattr(st.session_state.search_engine, 'index'):
+        if st.session_state.get('search_engine') and hasattr(st.session_state.get('search_engine'), 'index'):
             # 估算索引大小（每个向量约4KB）
-            if st.session_state.search_engine.index:
-                vector_count = st.session_state.search_engine.index.ntotal
+            if st.session_state.get('search_engine').index:
+                vector_count = st.session_state.get('search_engine').index.ntotal
                 storage_usage = round(vector_count * 4 / 1024, 1)  # 转换为MB
         st.metric("存储使用", f"{storage_usage} MB")
 
@@ -1391,14 +1393,14 @@ def email_management_interface():
 @performance_monitor
 def sync_emails(limit=10000, days_back=365, include_sent=True):
     """同步邮件"""
-    if not st.session_state.email_connector:
+    if not st.session_state.get('email_connector'):
         st.error("❌ 请先配置并连接邮箱")
         return
     
     with st.spinner("正在同步邮件..."):
         try:
             # 获取邮件文件夹
-            folders = st.session_state.email_connector.get_folders()
+            folders = st.session_state.get('email_connector').get_folders()
             
             # 过滤文件夹（可选择是否包含已发送邮件）
             if not include_sent:
@@ -1420,7 +1422,7 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
                 actual_limit = None if limit == -1 else limit
                 actual_days_back = None if days_back == -1 else days_back
                 
-                emails = st.session_state.email_connector.get_emails(
+                emails = st.session_state.get('email_connector').get_emails(
                     folder=folder,
                     limit=actual_limit,
                     days_back=actual_days_back
@@ -1438,9 +1440,9 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
             storage_success = False
             
             # 优先保存到OSS
-            if st.session_state.oss_storage:
+            if st.session_state.get('oss_storage'):
                 try:
-                    st.session_state.oss_storage.upload_emails_index(all_emails)
+                    st.session_state.get('oss_storage').upload_emails_index(all_emails)
                     st.info(f"☁️ 邮件数据已保存到阿里云OSS")
                     storage_success = True
                 except Exception as e:
@@ -1460,9 +1462,9 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
                     st.warning(f"⚠️ 本地缓存保存失败: {str(e)}")
             
             # 显示存储状态
-            if st.session_state.oss_storage and storage_success:
+            if st.session_state.get('oss_storage') and storage_success:
                 st.success(f"✅ 成功同步 {len(all_emails)} 封邮件（已保存到OSS和本地缓存）")
-            elif storage_success or st.session_state.oss_storage is None:
+            elif storage_success or st.session_state.get('oss_storage') is None:
                 st.success(f"✅ 成功同步 {len(all_emails)} 封邮件")
             else:
                 st.error(f"❌ 邮件同步完成但存储失败，请检查OSS配置")
@@ -1473,14 +1475,14 @@ def sync_emails(limit=10000, days_back=365, include_sent=True):
             
         except Exception as e:
             st.error(f"❌ 同步失败: {str(e)}")
-            st.session_state.error_count += 1
+            st.session_state.error_count = st.session_state.get('error_count', 0) + 1
             logger.error(f"Email sync failed: {str(e)}")
 
 @error_handler
 @performance_monitor
 def rebuild_search_index():
     """重建搜索索引"""
-    if not st.session_state.emails_data:
+    if not st.session_state.get('emails_data', []):
         st.error("❌ 没有邮件数据，请先同步邮件")
         return
     
@@ -1491,22 +1493,23 @@ def rebuild_search_index():
             search_engine = SemanticSearchEngine(model_name=model_name)
             
             # 构建索引
-            search_engine.build_index(st.session_state.emails_data)
+            emails_data = st.session_state.get('emails_data', [])
+            search_engine.build_index(emails_data)
             st.session_state.search_engine = search_engine
             
-            st.success(f"✅ 搜索索引重建完成，包含 {len(st.session_state.emails_data)} 封邮件")
-            logger.info(f"Search index rebuilt with {len(st.session_state.emails_data)} emails")
+            st.success(f"✅ 搜索索引重建完成，包含 {len(emails_data)} 封邮件")
+            logger.info(f"Search index rebuilt with {len(emails_data)} emails")
             
         except Exception as e:
             st.error(f"❌ 索引重建失败: {str(e)}")
-            st.session_state.error_count += 1
+            st.session_state.error_count = st.session_state.get('error_count', 0) + 1
             logger.error(f"Index rebuild failed: {str(e)}")
 
 @error_handler
 @performance_monitor
 def rebuild_search_index_async():
     """可选的异步索引：分批构建，基于会话进度控制"""
-    if not st.session_state.emails_data:
+    if not st.session_state.get('emails_data', []):
         st.error("❌ 没有邮件数据，请先同步邮件")
         return
 
@@ -1516,7 +1519,8 @@ def rebuild_search_index_async():
 
     # 初始化或继续进度
     progress = st.session_state.get('index_progress', 0)
-    total = len(st.session_state.emails_data)
+    emails_data = st.session_state.get('emails_data', [])
+    total = len(emails_data)
 
     if not st.session_state.get('search_engine') or progress == 0:
         model_name = config['ai'].get('model_name', 'all-MiniLM-L6-v2')
@@ -1528,7 +1532,7 @@ def rebuild_search_index_async():
             pass
         # 手动准备元数据
         metadata = []
-        for email in st.session_state.emails_data:
+        for email in emails_data:
             metadata.append({
                 'uid': email.uid,
                 'subject': email.subject,
@@ -1539,10 +1543,10 @@ def rebuild_search_index_async():
                 'body_text': email.body_text,
                 'body_html': email.body_html
             })
-        st.session_state.search_engine.email_metadata = metadata
+        st.session_state.get('search_engine').email_metadata = metadata
         st.session_state.index_progress = 0
 
-    engine = st.session_state.search_engine
+    engine = st.session_state.get('search_engine')
 
     # 分批处理直到耗尽时间预算
     processed = progress
@@ -1553,7 +1557,7 @@ def rebuild_search_index_async():
             batch_end = min(processed + batch_size, total)
             # 准备文本
             texts = []
-            for email in st.session_state.emails_data[processed:batch_end]:
+            for email in emails_data[processed:batch_end]:
                 combined_text = engine._prepare_email_text(email)
                 texts.append(combined_text)
             if not texts:
@@ -1593,14 +1597,14 @@ def statistics_interface():
     
     # 搜索历史
     st.markdown("### 🔍 搜索历史")
-    if st.session_state.search_history:
-        history_df = pd.DataFrame(st.session_state.search_history)
+    if st.session_state.get('search_history', []):
+        history_df = pd.DataFrame(st.session_state.get('search_history', []))
         st.dataframe(history_df, use_container_width=True)
         
         # 搜索统计
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("总搜索次数", len(st.session_state.search_history))
+            st.metric("总搜索次数", len(st.session_state.get('search_history', [])))
         with col2:
             avg_results = history_df['results_count'].mean() if not history_df.empty else 0
             st.metric("平均结果数", f"{avg_results:.1f}")
@@ -1612,8 +1616,8 @@ def statistics_interface():
     
     # 性能统计
     st.markdown("### ⚡ 性能统计")
-    if st.session_state.performance_stats:
-        st.json(st.session_state.performance_stats)
+    if st.session_state.get('performance_stats'):
+        st.json(st.session_state.get('performance_stats'))
     else:
         st.info("暂无性能数据")
     
