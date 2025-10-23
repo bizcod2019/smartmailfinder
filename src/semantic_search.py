@@ -699,9 +699,19 @@ class SemanticSearchEngine:
             str: 邮件预览文本
         """
         body_text = metadata.get('body_text', '')
+        body_html = metadata.get('body_html', '')
         
-        if not body_text:
-            return metadata.get('subject', '无内容预览')
+        # 如果body_text为空但有body_html，尝试从HTML中提取文本
+        if not body_text.strip() and body_html:
+            body_text = self._clean_html(body_html)
+        
+        # 如果仍然没有正文内容，使用主题作为预览
+        if not body_text.strip():
+            subject = metadata.get('subject', '')
+            if subject:
+                return f"主题: {subject}"
+            else:
+                return "邮件内容为空"
         
         # 尝试找到与查询相关的片段
         query_words = query.lower().split()
@@ -709,10 +719,11 @@ class SemanticSearchEngine:
         best_score = 0
         
         # 将正文分成句子
-        sentences = re.split(r'[.!?。！？]', body_text)
+        sentences = re.split(r'[.!?。！？\n]', body_text)
         
         for sentence in sentences:
-            if len(sentence.strip()) < 10:
+            sentence = sentence.strip()
+            if len(sentence) < 10:
                 continue
             
             # 计算句子与查询的相关性
@@ -721,11 +732,13 @@ class SemanticSearchEngine:
             
             if score > best_score:
                 best_score = score
-                best_snippet = sentence.strip()
+                best_snippet = sentence
         
         # 如果没有找到相关片段，使用开头部分
         if not best_snippet:
-            best_snippet = body_text[:self.max_preview_length]
+            # 清理文本，移除多余的空白字符
+            clean_text = re.sub(r'\s+', ' ', body_text.strip())
+            best_snippet = clean_text[:self.max_preview_length]
         
         # 限制预览长度
         if len(best_snippet) > self.max_preview_length:
